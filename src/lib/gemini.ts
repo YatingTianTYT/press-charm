@@ -28,7 +28,7 @@ export async function generateHandModelImage(
             },
           },
           {
-            text: 'Generate a photorealistic image of a hand model wearing these press-on nails. The hand should be elegantly posed against a clean, aesthetic background. Make it look like a professional nail salon Instagram photo.',
+            text: 'Take the exact press-on nails from this product photo and place them onto an elegant hand model. You MUST preserve the exact nail design, colors, patterns, and details from the original image — do NOT redesign or reimagine the nails. Extract/cut out the nails as they appear and show them being worn on a realistic female hand with a clean, minimal background. The final image should look like a professional nail salon photo where the model is wearing these exact nails.',
           },
         ],
       },
