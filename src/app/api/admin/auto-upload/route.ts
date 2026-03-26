@@ -45,8 +45,8 @@ export async function POST(request: NextRequest) {
         features: JSON.stringify(aiResponse.features),
         careInstructions: aiResponse.careInstructions,
         stockXS: 0,
-        stockS: 0,
-        stockM: 0,
+        stockS: 1,
+        stockM: 1,
         stockL: 0,
         images: {
           create: [{ url: imageUrl, position: 0 }],
