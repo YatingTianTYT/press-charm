@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.presscharm.watcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/yatingtian/vibe coding prjs/Press Charm/press-charm/scripts/auto-upload.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PRESS_CHARM_URL</key>
+        <string>https://press-charm.vercel.app</string>
+        <key>PRESS_CHARM_PASSWORD</key>
+        <string>presscharm2024</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/presscharm-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/presscharm-watcher-error.log</string>
+</dict>
+</plist>

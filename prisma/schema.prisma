@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  name           String
+  description    String   @default("")
+  price          Int      // in cents
+  compareAtPrice Int?     // original price for sales
+  category       String   @default("")
+  tags           String   @default("") // comma-separated
+  featured       Boolean  @default(false)
+  stockXS        Int      @default(0)
+  stockS         Int      @default(0)
+  stockM         Int      @default(0)
+  stockL           Int      @default(0)
+  status           String   @default("published") // "draft" | "published"
+  features         String   @default("") // JSON string array
+  careInstructions String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  images     ProductImage[]
+  orderItems OrderItem[]
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  url       String
+  position  Int     @default(0)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id            String   @id @default(cuid())
+  orderNumber   String   @unique
+  customerName  String
+  email         String
+  phone         String   @default("")
+  addressLine1  String
+  addressLine2  String   @default("")
+  city          String
+  state         String
+  zipCode       String
+  subtotal      Int      // cents
+  shipping      Int      // cents
+  discount      Int      @default(0) // cents
+  total         Int      // cents
+  discountCode  String?
+  stripePaymentId String?
+  trackingNumber String   @default("")
+  status        String   @default("new") // new, packed, shipped, done
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items OrderItem[]
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  name      String
+  size      String
+  quantity  Int
+  price     Int     // price per item in cents
+
+  @@index([orderId])
+}
+
+model DiscountCode {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  type        String    // "percent" or "fixed"
+  value       Int       // percent (e.g. 20) or cents (e.g. 500)
+  minOrder    Int?      // minimum order in cents
+  expiresAt   DateTime?
+  usageCount  Int       @default(0)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+}
