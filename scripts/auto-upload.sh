@@ -7,7 +7,7 @@
 WATCH_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/PressCharm/new"
 DONE_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/PressCharm/done"
 SITE_URL="${PRESS_CHARM_URL:-http://localhost:3000}"
-ADMIN_PASSWORD="${PRESS_CHARM_PASSWORD:-presscharm2024}"
+ADMIN_PASSWORD="${PRESS_CHARM_PASSWORD:?Error: PRESS_CHARM_PASSWORD environment variable is required. Set it with: export PRESS_CHARM_PASSWORD=yourpassword}"
 
 # Create directories if they don't exist
 mkdir -p "$WATCH_DIR" "$DONE_DIR"

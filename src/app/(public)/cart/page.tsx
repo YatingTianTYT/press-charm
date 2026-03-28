@@ -18,7 +18,7 @@ export default function CartPage() {
   const subtotal = getCartTotal();
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const bulkDiscount = calculateBulkDiscount(totalQuantity);
-  const shipping = calculateShipping(subtotal - bulkDiscount);
+  const shipping = calculateShipping(subtotal);
   const total = subtotal + shipping - discountAmount - bulkDiscount;
 
   async function handleApplyDiscount() {
@@ -183,12 +183,7 @@ export default function CartPage() {
           </div>
 
           <Link
-            href={{
-              pathname: "/checkout",
-              ...(appliedCode
-                ? {}
-                : {}),
-            }}
+            href="/checkout"
             onClick={() => {
               // Store discount info in sessionStorage for checkout page
               if (appliedCode || bulkDiscount > 0) {

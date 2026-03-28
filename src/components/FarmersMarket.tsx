@@ -9,11 +9,11 @@ export default function FarmersMarket() {
             key={i}
             className="font-script text-sm text-[#FAF7F2] mx-0 flex-shrink-0"
           >
-            Find us this weekend &rarr; Sunday Farmers Market &middot; Saturday
+            Find us this weekend &rarr; Saturday Farmers Market &middot; Saturday
             9am&ndash;2pm &#10022; Handmade with love &#10022;&nbsp;&nbsp;&nbsp;&nbsp;
-            Find us this weekend &rarr; Sunday Farmers Market &middot; Saturday
+            Find us this weekend &rarr; Saturday Farmers Market &middot; Saturday
             9am&ndash;2pm &#10022; Handmade with love &#10022;&nbsp;&nbsp;&nbsp;&nbsp;
-            Find us this weekend &rarr; Sunday Farmers Market &middot; Saturday
+            Find us this weekend &rarr; Saturday Farmers Market &middot; Saturday
             9am&ndash;2pm &#10022; Handmade with love &#10022;&nbsp;&nbsp;&nbsp;&nbsp;
           </span>
         ))}

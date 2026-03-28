@@ -40,9 +40,7 @@ export default function RootLayout({
         className={`${playfair.variable} ${dmSans.variable} ${dancing.variable} antialiased bg-[#FAF7F2] text-[#2C1810]`}
       >
         <CartProvider>
-          <Header />
-          <main className="min-h-screen">{children}</main>
-          <Footer />
+          {children}
         </CartProvider>
       </body>
     </html>

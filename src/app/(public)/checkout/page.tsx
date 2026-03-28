@@ -76,7 +76,7 @@ export default function CheckoutPage() {
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const computedBulkDiscount = calculateBulkDiscount(totalQuantity);
   const activeBulkDiscount = computedBulkDiscount || bulkDiscount;
-  const shipping = calculateShipping(subtotal - activeBulkDiscount);
+  const shipping = calculateShipping(subtotal);
   const total = subtotal + shipping - discountAmount - activeBulkDiscount;
 
   function handleChange(

@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
         name: aiResponse.title,
         description: aiResponse.description,
         price: aiResponse.price,
+        tags: aiResponse.tags.join(', '),
         status: 'draft',
         features: JSON.stringify(aiResponse.features),
         careInstructions: aiResponse.careInstructions,

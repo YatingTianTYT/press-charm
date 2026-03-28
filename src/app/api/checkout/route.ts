@@ -62,8 +62,8 @@ export async function POST(request: NextRequest) {
     const totalQuantity = items.reduce((sum: number, item: { quantity: number }) => sum + item.quantity, 0)
     const bulkDiscountAmount = calculateBulkDiscount(totalQuantity)
 
-    // Calculate shipping (after bulk discount)
-    const shippingCost = calculateShipping(subtotal - bulkDiscountAmount)
+    // Calculate shipping (based on original subtotal)
+    const shippingCost = calculateShipping(subtotal)
     if (shippingCost > 0) {
       lineItems.push({
         price_data: {

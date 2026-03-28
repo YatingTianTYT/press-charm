@@ -92,48 +92,53 @@ export async function POST(request: NextRequest) {
 
     const orderNumber = generateOrderNumber()
 
-    const order = await prisma.order.create({
-      data: {
-        orderNumber,
-        customerName,
-        email,
-        phone: phone || '',
-        addressLine1,
-        addressLine2: addressLine2 || '',
-        city,
-        state,
-        zipCode,
-        subtotal,
-        shipping,
-        discount,
-        total,
-        discountCode: discountCode || null,
-        stripePaymentId: stripePaymentId || null,
-        items: {
-          create: orderItems,
-        },
-      },
-      include: { items: true },
-    })
-
-    // Decrease stock
-    for (const item of items) {
-      const stockField = `stock${item.size.toUpperCase()}`
-      await prisma.product.update({
-        where: { id: item.productId },
+    // Use transaction to ensure order creation and stock decrement are atomic
+    const order = await prisma.$transaction(async (tx) => {
+      const createdOrder = await tx.order.create({
         data: {
-          [stockField]: { decrement: item.quantity },
+          orderNumber,
+          customerName,
+          email,
+          phone: phone || '',
+          addressLine1,
+          addressLine2: addressLine2 || '',
+          city,
+          state,
+          zipCode,
+          subtotal,
+          shipping,
+          discount,
+          total,
+          discountCode: discountCode || null,
+          stripePaymentId: stripePaymentId || null,
+          items: {
+            create: orderItems,
+          },
         },
+        include: { items: true },
       })
-    }
 
-    // Increment discount code usage if used
-    if (discountCode) {
-      await prisma.discountCode.updateMany({
-        where: { code: discountCode },
-        data: { usageCount: { increment: 1 } },
-      })
-    }
+      // Decrease stock atomically within the transaction
+      for (const item of items) {
+        const stockField = `stock${item.size.toUpperCase()}`
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            [stockField]: { decrement: item.quantity },
+          },
+        })
+      }
+
+      // Increment discount code usage if used
+      if (discountCode) {
+        await tx.discountCode.updateMany({
+          where: { code: discountCode },
+          data: { usageCount: { increment: 1 } },
+        })
+      }
+
+      return createdOrder
+    })
 
     return NextResponse.json(order, { status: 201 })
   } catch (error) {

@@ -8,7 +8,13 @@ interface AIResponse {
   price: number
   features: string[]
   careInstructions: string
+  tags: string[]
 }
+
+const STYLE_TAGS = ['Floral', 'Glitter', 'French', 'Minimal', 'Art', 'Ombre', 'Gems']
+const VIBE_TAGS = ['Elegant', 'Cute', 'Bold']
+const COLOR_TAGS = ['Pink', 'Red', 'Nude', 'White', 'Black', 'Blue', 'Green', 'Purple', 'Gold', 'Silver', 'Multicolor']
+const ALL_TAGS = [...STYLE_TAGS, ...VIBE_TAGS, ...COLOR_TAGS]
 
 export default function UploadPage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -26,6 +32,7 @@ export default function UploadPage() {
   const [price, setPrice] = useState('')
   const [features, setFeatures] = useState(['', '', '', ''])
   const [careInstructions, setCareInstructions] = useState('')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0]
@@ -60,6 +67,7 @@ export default function UploadPage() {
       const feats = ai.features || []
       setFeatures([feats[0] || '', feats[1] || '', feats[2] || '', feats[3] || ''])
       setCareInstructions(ai.careInstructions)
+      setSelectedTags(ai.tags || [])
     } catch {
       setError('Failed to generate listing')
     } finally {
@@ -76,6 +84,7 @@ export default function UploadPage() {
         name: title.trim(),
         description: description.trim(),
         price: Math.round(parseFloat(price) * 100),
+        tags: selectedTags.join(', '),
         status: publish ? 'published' : 'draft',
         features: JSON.stringify(features.filter(Boolean)),
         careInstructions: careInstructions.trim(),
@@ -97,6 +106,7 @@ export default function UploadPage() {
           setPrice('')
           setFeatures(['', '', '', ''])
           setCareInstructions('')
+          setSelectedTags([])
           setSuccess(null)
         }, 2000)
       } else {
@@ -236,6 +246,70 @@ export default function UploadPage() {
               rows={2}
               className="w-full px-3 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent resize-vertical text-base"
             />
+          </div>
+
+          {/* Tags */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">Style</p>
+              <div className="flex flex-wrap gap-2">
+                {STYLE_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setSelectedTags((prev) =>
+                      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                    )}
+                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                      selectedTags.includes(tag)
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Vibe</p>
+              <div className="flex flex-wrap gap-2">
+                {VIBE_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setSelectedTags((prev) =>
+                      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                    )}
+                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                      selectedTags.includes(tag)
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Colors</p>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setSelectedTags((prev) =>
+                      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                    )}
+                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                      selectedTags.includes(tag)
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Generate Hand Model Button */}

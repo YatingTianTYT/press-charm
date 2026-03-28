@@ -22,7 +22,7 @@ export default function Footer() {
               Handmade with love
             </p>
             <p className="text-xs text-[#8B6F5E] mt-1">
-              &copy; 2024 Press Charm. All rights reserved.
+              &copy; {new Date().getFullYear()} Press Charm. All rights reserved.
             </p>
           </div>
 
@@ -41,7 +41,9 @@ export default function Footer() {
 
           {/* Social */}
           <a
-            href="#"
+            href="https://instagram.com/presscharm.nails"
+            target="_blank"
+            rel="noopener noreferrer"
             className="text-[#8B6F5E] hover:text-[#C4896F] transition-colors"
             aria-label="Instagram"
           >

@@ -6,11 +6,14 @@ import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 
 const categories = [
-  { name: "Classic" },
-  { name: "Trendy" },
-  { name: "Seasonal" },
-  { name: "French" },
-  { name: "Art" },
+  { name: "Floral", emoji: "🌸" },
+  { name: "Glitter", emoji: "✨" },
+  { name: "French", emoji: "🤍" },
+  { name: "Minimal", emoji: "◯" },
+  { name: "Art", emoji: "🎨" },
+  { name: "Elegant", emoji: "💎" },
+  { name: "Cute", emoji: "🎀" },
+  { name: "Bold", emoji: "🖤" },
 ];
 
 export default async function HomePage() {
@@ -93,15 +96,15 @@ export default async function HomePage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {categories.map((cat) => (
               <Link
                 key={cat.name}
                 href={`/shop?tag=${encodeURIComponent(cat.name)}`}
                 className="group flex flex-col items-center justify-center py-8 px-4 bg-[#FAF7F2] rounded-lg border border-[#E8DDD4] hover:border-[#C4896F] hover:shadow-sm transition-all"
               >
-                <span className="text-2xl mb-3 text-[#C4896F] font-extralight tracking-widest">
-                  {cat.name.charAt(0)}
+                <span className="text-2xl mb-3">
+                  {cat.emoji}
                 </span>
                 <span className="text-sm font-light tracking-wide text-[#8B6F5E] group-hover:text-[#2C1810] transition-colors">
                   {cat.name}
