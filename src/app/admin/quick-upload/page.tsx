@@ -60,6 +60,13 @@ export default function QuickUploadPage() {
   const [error, setError] = useState('')
   const [toast, setToast] = useState<string | null>(null)
 
+  // Progress phases for the synchronous upload flow:
+  //   idle      → no upload in flight
+  //   analyzing → photo uploaded, Claude Vision running (~3-5s)
+  //   rendering → Claude done, Gemini hand model running (~10-20s)
+  //   done      → success, transitioning to preview
+  const [phase, setPhase] = useState<'idle' | 'analyzing' | 'rendering' | 'done'>('idle')
+
   const mainInputRef = useRef<HTMLInputElement>(null)
   const extraInputRef = useRef<HTMLInputElement>(null)
 
@@ -79,80 +86,108 @@ export default function QuickUploadPage() {
     setTimeout(() => setToast(null), 2500)
   }, [])
 
-  // ---- main photo upload ----
+  // ---- main photo upload (synchronous: wait for Claude AND Gemini) ----
+  // User asked to wait for the hand model before being shown the preview, so
+  // both AI steps complete before we reveal the editing screen. If Gemini
+  // fails or takes >35s we still show the preview so they can recover with
+  // the manual "Re-render hand" button.
   async function handleMainPhoto(file: File) {
     if (!file) return
     setError('')
     setUploading(true)
+    setPhase('analyzing')
     try {
+      // Step 1: Claude Vision — turns the photo into a draft listing
       const form = new FormData()
       form.append('file', file)
-      // (stock fields intentionally omitted — server defaults to 0)
-
       const res = await fetch('/api/admin/auto-upload', { method: 'POST', body: form })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || `Upload failed: HTTP ${res.status}`)
       }
-      const data = await res.json()
-      const draft: Product = data.product
+      const { product: draft } = await res.json() as { product: Product }
 
-      // Kick off Gemini hand-model image generation. This is async on purpose:
-      // it can take 10-30s and we don't want to block the UI. The preview shows
-      // a placeholder; when Gemini returns we splice the new image in.
-      // In trust mode we don't wait either — publish goes ahead, and the hand
-      // model arrives on the already-published product (clients fetching the
-      // PDP will see it once it's there).
-      generateHandModel(draft.id)
+      // Step 2: Gemini — render the hand-model image. Bounded by 35s so a
+      // hung Gemini call doesn't strand the user.
+      setPhase('rendering')
+      let finalProduct: Product = draft
+      try {
+        const handImage = await generateHandModelWithTimeout(draft.id, 35_000)
+        if (handImage) {
+          finalProduct = {
+            ...draft,
+            images: [...draft.images, handImage],
+          }
+        }
+      } catch (handErr) {
+        // Non-fatal: we still want the user to see the preview and recover
+        const msg = handErr instanceof Error ? handErr.message : 'Hand model failed'
+        flash(`⚠ ${msg} — use Re-render to retry`)
+      }
+
+      setPhase('done')
 
       if (trustMode) {
-        // Skip preview entirely: publish immediately and reset.
-        await publishProduct(draft.id)
-        flash(`✓ Published: ${draft.name} (hand model rendering in background)`)
+        // Skip preview entirely: publish whatever we have and reset.
+        await publishProduct(finalProduct.id)
+        flash(`✓ Published: ${finalProduct.name}`)
       } else {
-        setProduct(draft)
+        setProduct(finalProduct)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
+      setPhase('idle')
       setUploading(false)
     }
   }
 
-  // ---- async Gemini hand-model image ----
-  // Fires in the background; resolves into the product images list when done.
-  // Designed not to throw — failures just toast and let the user retry.
-  async function generateHandModel(productId: string) {
-    setGeneratingHand(true)
+  // ---- Gemini hand-model image (with timeout) ----
+  // Returns the new image row, or throws on failure / timeout.
+  async function generateHandModelWithTimeout(
+    productId: string,
+    timeoutMs: number,
+  ): Promise<ImageRow | null> {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     try {
       const res = await fetch('/api/admin/generate-hand-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productId }),
+        signal: ctrl.signal,
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || `Hand model failed (HTTP ${res.status})`)
       }
       const data = await res.json()
+      return { id: data.imageId, url: data.url, position: 1 }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw new Error('Hand model timed out after 35s')
+      }
+      throw e
+    } finally {
+      clearTimeout(timer)
+    }
+  }
 
-      // Splice the new image into local state only if we're still on this
-      // draft (user may have hit Discard during the wait).
-      setProduct((p) => {
-        if (!p || p.id !== productId) return p
-        return {
-          ...p,
-          images: [
-            ...p.images,
-            { id: data.imageId, url: data.url, position: p.images.length },
-          ],
-        }
-      })
-      flash('Hand model added')
+  // ---- manual re-render button on the preview screen ----
+  async function regenerateHandModel() {
+    if (!product) return
+    setGeneratingHand(true)
+    setError('')
+    try {
+      const newImage = await generateHandModelWithTimeout(product.id, 35_000)
+      if (newImage) {
+        setProduct((p) =>
+          p ? { ...p, images: [...p.images, { ...newImage, position: p.images.length }] } : p,
+        )
+        flash('Hand model added')
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Hand model generation failed'
-      // Non-fatal — keep the draft alive
-      setError(msg)
+      setError(err instanceof Error ? err.message : 'Re-render failed')
     } finally {
       setGeneratingHand(false)
     }
@@ -297,6 +332,38 @@ export default function QuickUploadPage() {
 
   // ---- entry screen ----
   if (!product) {
+    // Full-screen progress while we wait for Claude + Gemini
+    if (uploading || phase === 'analyzing' || phase === 'rendering') {
+      return (
+        <div className="max-w-md mx-auto pt-24 text-center">
+          <div className="text-7xl mb-6 animate-pulse">
+            {phase === 'rendering' ? '✋' : '🪞'}
+          </div>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">
+            {phase === 'rendering' ? 'Rendering hand model…' : 'Analyzing your nails…'}
+          </h2>
+          <p className="text-gray-500 mb-8 leading-relaxed">
+            {phase === 'rendering'
+              ? 'Gemini is generating a hand-model photo. Usually 10–20 seconds.'
+              : 'Claude is writing the product name, price, and description.'}
+          </p>
+
+          <div className="space-y-2 max-w-xs mx-auto text-left">
+            <Step
+              label="Analyze nails (Claude)"
+              done={phase === 'rendering' || phase === 'done'}
+              active={phase === 'analyzing'}
+            />
+            <Step
+              label="Render hand model (Gemini)"
+              done={phase === 'done'}
+              active={phase === 'rendering'}
+            />
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="max-w-md mx-auto">
         <div className="flex items-center justify-between mb-6">
@@ -314,8 +381,8 @@ export default function QuickUploadPage() {
 
         <p className="text-sm text-gray-500 mb-4 leading-relaxed">
           {trustMode
-            ? '⚠ Trust mode is ON — uploads will publish immediately with the AI output and 0 stock. Set stock later from the product list.'
-            : 'Snap a photo. AI will draft name + price + description. You\'ll review on the next screen.'}
+            ? '⚠ Trust mode is ON — uploads will publish immediately once Claude + Gemini finish. Stock starts at 0; dial it in from the product list later.'
+            : 'Snap a photo. Claude drafts a listing, Gemini renders a hand-model image. We\'ll wait for both before showing you the preview.'}
         </p>
 
         <button
@@ -324,9 +391,7 @@ export default function QuickUploadPage() {
           className="w-full p-8 bg-white border-2 border-dashed border-gray-300 rounded-3xl hover:border-gray-900 disabled:opacity-50 transition-all"
         >
           <div className="text-6xl mb-3">📷</div>
-          <div className="text-lg font-semibold text-gray-900">
-            {uploading ? 'Uploading…' : 'Take Main Photo'}
-          </div>
+          <div className="text-lg font-semibold text-gray-900">Take Main Photo</div>
           <div className="text-xs text-gray-500 mt-1">JPEG / PNG / HEIC — up to 10MB</div>
         </button>
 
@@ -416,7 +481,7 @@ export default function QuickUploadPage() {
         {/* manual retry if Gemini failed */}
         {!generatingHand && product.images.length < 3 && (
           <button
-            onClick={() => generateHandModel(product.id)}
+            onClick={regenerateHandModel}
             className="shrink-0 w-32 h-48 border border-amber-300 bg-amber-50 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs"
           >
             <span className="text-2xl mb-1">✋</span>
@@ -572,6 +637,28 @@ export default function QuickUploadPage() {
           <p className="max-w-md mx-auto mt-2 text-center text-green-700 text-xs">{toast}</p>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Single row of the two-step progress checklist on the loading screen. */
+function Step({ label, done, active }: { label: string; done: boolean; active: boolean }) {
+  const dotClass = done
+    ? 'bg-green-500 text-white'
+    : active
+      ? 'bg-amber-500 text-white animate-pulse'
+      : 'bg-gray-200 text-gray-500'
+  const labelClass = done
+    ? 'text-gray-900'
+    : active
+      ? 'text-gray-900 font-medium'
+      : 'text-gray-400'
+  return (
+    <div className="flex items-center gap-3">
+      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${dotClass}`}>
+        {done ? '✓' : active ? '·' : ''}
+      </span>
+      <span className={`text-sm ${labelClass}`}>{label}</span>
     </div>
   )
 }
