@@ -35,7 +35,17 @@ export async function POST(request: NextRequest) {
     // Call Claude Vision
     const aiResponse = await analyzeNailImage(imageBase64, mimeType)
 
-    // Create draft product
+    // Optional caller-supplied overrides (PWA quick-upload sends these).
+    // The legacy V3 watcher doesn't, so we fall back to safe zeros.
+    const stockXS = Number(formData.get('stockXS') ?? 0) || 0
+    const stockS = Number(formData.get('stockS') ?? 0) || 0
+    const stockM = Number(formData.get('stockM') ?? 0) || 0
+    const stockL = Number(formData.get('stockL') ?? 0) || 0
+
+    // Create draft product. Default stock is all 0 — the operator is expected
+    // to dial real counts in /admin/quick-upload before publishing (or via
+    // the regular admin edit page). This is safer than the old S=1/M=1
+    // defaults, which created phantom inventory for sizes you hadn't made.
     const product = await prisma.product.create({
       data: {
         name: aiResponse.title,
@@ -45,10 +55,10 @@ export async function POST(request: NextRequest) {
         status: 'draft',
         features: JSON.stringify(aiResponse.features),
         careInstructions: aiResponse.careInstructions,
-        stockXS: 0,
-        stockS: 1,
-        stockM: 1,
-        stockL: 0,
+        stockXS,
+        stockS,
+        stockM,
+        stockL,
         images: {
           create: [{ url: imageUrl, position: 0 }],
         },

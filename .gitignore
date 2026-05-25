@@ -44,3 +44,14 @@ next-env.d.ts
 dev.db
 API key
 public/uploads/
+
+# git tooling scratch
+.git-rewrite/
+
+# stray test images at repo root
+/Image_*.jpg
+/Image_*.jpeg
+/Image_*.png
+
+# local pglite test scripts
+/test-*.mjs

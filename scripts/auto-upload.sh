@@ -61,7 +61,14 @@ process_image() {
   echo "  → Publishing..."
   curl -s -b "$COOKIE_FILE" -X POST "$SITE_URL/api/admin/publish/$PRODUCT_ID" > /dev/null
 
-  # Step 4: Move to done
+  # Step 4: Generate Market Mode QR label for printing
+  echo "  → Generating QR label..."
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -x "$SCRIPT_DIR/generate-qr-label.sh" ]; then
+    "$SCRIPT_DIR/generate-qr-label.sh" "$PRODUCT_ID" || echo "  → QR label step failed (non-fatal, continuing)"
+  fi
+
+  # Step 5: Move to done
   mv "$FILE" "$DONE_DIR/$FILENAME"
 
   echo "  ✓ Published: $PRODUCT_NAME"

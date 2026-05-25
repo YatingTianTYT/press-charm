@@ -28,6 +28,7 @@ model Product {
 
   images     ProductImage[]
   orderItems OrderItem[]
+  sales      Sale[]
 }
 
 model ProductImage {
@@ -75,6 +76,28 @@ model OrderItem {
   price     Int     // price per item in cents
 
   @@index([orderId])
+}
+
+// In-person + online sales ledger. Created automatically on online checkout
+// (channel='online'), and manually via Market Mode (/admin/sell/[id]) when
+// selling at farmers markets (channel='market').
+model Sale {
+  id                    String   @id @default(cuid())
+  productId             String
+  product               Product  @relation(fields: [productId], references: [id])
+  productName           String   // snapshot — keep history intact if product is later renamed/deleted
+  size                  String   // XS / S / M / L
+  price                 Int      // unit price in cents at time of sale
+  paymentMethod         String   // "cash" | "venmo" | "card" | "online"
+  stripePaymentIntentId String?  // only set when payment goes through Stripe
+  channel               String   // "market" | "online"
+  orderId               String?  // links back to Order row when channel='online'
+  note                  String   @default("")
+  soldAt                DateTime @default(now())
+
+  @@index([soldAt])
+  @@index([productId])
+  @@index([channel])
 }
 
 model DiscountCode {

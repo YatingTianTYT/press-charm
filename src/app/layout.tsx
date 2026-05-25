@@ -27,6 +27,24 @@ export const metadata: Metadata = {
   title: "Press Charm | Handcrafted Press-On Nails",
   description:
     "Each set is hand-painted with care. Shop unique, handcrafted press-on nails made with intention.",
+  manifest: "/manifest.json",
+  // iOS PWA — installs as a home-screen icon when admin opens /admin/quick-upload
+  appleWebApp: {
+    capable: true,
+    title: "Press Charm",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
+};
+
+export const viewport = {
+  themeColor: "#C4896F",
 };
 
 export default function RootLayout({
