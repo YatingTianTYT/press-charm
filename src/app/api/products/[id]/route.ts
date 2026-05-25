@@ -56,7 +56,30 @@ export async function PUT(
       status,
       features,
       careInstructions,
+      shortCode,
     } = body
+
+    // shortCode collision check: if the caller is changing it, make sure no
+    // OTHER active product is using that number. We allow archived dupes since
+    // those codes are eligible for reuse.
+    if (shortCode !== undefined && shortCode !== null) {
+      const conflict = await prisma.product.findFirst({
+        where: {
+          shortCode,
+          archived: false,
+          NOT: { id },
+        },
+        select: { id: true, name: true },
+      })
+      if (conflict) {
+        return NextResponse.json(
+          {
+            error: `#${String(shortCode).padStart(3, '0')} is already used by "${conflict.name}". Pick another.`,
+          },
+          { status: 409 },
+        )
+      }
+    }
 
     // If images are provided, delete old ones and create new ones
     if (images) {
@@ -80,6 +103,7 @@ export async function PUT(
         ...(status !== undefined && { status }),
         ...(features !== undefined && { features }),
         ...(careInstructions !== undefined && { careInstructions }),
+        ...(shortCode !== undefined && { shortCode }),
         ...(images && {
           images: {
             create: images.map((img: { url: string }, index: number) => ({

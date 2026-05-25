@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // ---- atomic: decrement stock + write Sale row ----
+  // ---- atomic: decrement stock + write Sale row + maybe archive ----
   try {
     const result = await prisma.$transaction(async (tx) => {
       const product = await tx.product.findUnique({ where: { id: productId } })
@@ -84,9 +84,29 @@ export async function POST(request: NextRequest) {
       const currentStock = product[stockField]
       if (currentStock <= 0) throw new Error('OUT_OF_STOCK')
 
+      // Compute the new per-size stock numbers so we can check "fully sold out"
+      const newStock = {
+        stockXS: product.stockXS,
+        stockS: product.stockS,
+        stockM: product.stockM,
+        stockL: product.stockL,
+      }
+      newStock[stockField] = currentStock - 1
+
+      // If every size is now 0 → archive the product so it drops off the
+      // sell page automatically. shortCode stays so we can identify the
+      // product in historical Sale records; the allocator just considers
+      // archived codes free once the active pool hits 999.
+      const totalRemaining =
+        newStock.stockXS + newStock.stockS + newStock.stockM + newStock.stockL
+      const shouldArchive = totalRemaining === 0
+
       await tx.product.update({
         where: { id: productId },
-        data: { [stockField]: { decrement: 1 } },
+        data: {
+          [stockField]: { decrement: 1 },
+          ...(shouldArchive ? { archived: true } : {}),
+        },
       })
 
       const sale = await tx.sale.create({
@@ -102,11 +122,16 @@ export async function POST(request: NextRequest) {
         },
       })
 
-      return { sale, remainingStock: currentStock - 1 }
+      return {
+        sale,
+        remainingStock: currentStock - 1,
+        archived: shouldArchive,
+      }
     })
 
     return NextResponse.json({
       ok: true,
+      archived: result.archived,
       saleId: result.sale.id,
       remainingStock: result.remainingStock,
     })

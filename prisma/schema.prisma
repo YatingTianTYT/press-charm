@@ -23,8 +23,19 @@ model Product {
   status           String   @default("published") // "draft" | "published"
   features         String   @default("") // JSON string array
   careInstructions String   @default("")
+  // Short numeric code shared across all sizes of this product. Auto-assigned
+  // on create. Displayed as "042" on the sell page. The size is added
+  // contextually via the input (e.g. "s-042" auto-locks size S).
+  shortCode        Int?
+  // True once every size has stock=0 and the product has been auto-retired
+  // from the active sell list. shortCode becomes eligible for reuse once
+  // the active pool exceeds 999.
+  archived         Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@index([shortCode])
+  @@index([archived])
 
   images     ProductImage[]
   orderItems OrderItem[]

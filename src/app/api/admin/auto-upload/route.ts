@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { verifySession } from '@/lib/auth'
 import { analyzeNailImage } from '@/lib/claude'
 import { uploadImage } from '@/lib/cloudinary'
+import { allocateNextShortCode } from '@/lib/shortcode'
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,6 +43,10 @@ export async function POST(request: NextRequest) {
     const stockM = Number(formData.get('stockM') ?? 0) || 0
     const stockL = Number(formData.get('stockL') ?? 0) || 0
 
+    // Allocate the next available shortCode (e.g. 42) for this product.
+    // Returns null only if every 1-999 slot is in use by active products.
+    const shortCode = await allocateNextShortCode()
+
     // Create draft product. Default stock is all 0 — the operator is expected
     // to dial real counts in /admin/quick-upload before publishing (or via
     // the regular admin edit page). This is safer than the old S=1/M=1
@@ -55,6 +60,7 @@ export async function POST(request: NextRequest) {
         status: 'draft',
         features: JSON.stringify(aiResponse.features),
         careInstructions: aiResponse.careInstructions,
+        shortCode,
         stockXS,
         stockS,
         stockM,

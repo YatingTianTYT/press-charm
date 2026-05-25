@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, use } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
 type Size = 'XS' | 'S' | 'M' | 'L'
@@ -28,12 +28,19 @@ const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`
 export default function MarketSellPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // Optional ?size=S query — when arriving from a "s-042" shortCode the user
+  // has already implicitly picked the size, so we skip the picker and go
+  // straight to the payment screen.
+  const presetSize = searchParams.get('size')?.toUpperCase() as Size | null
 
   const [product, setProduct] = useState<ProductInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [selectedSize, setSelectedSize] = useState<Size | null>(null)
+  const [selectedSize, setSelectedSize] = useState<Size | null>(
+    presetSize && ['XS', 'S', 'M', 'L'].includes(presetSize) ? presetSize : null,
+  )
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState(false)
 

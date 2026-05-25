@@ -48,6 +48,7 @@ interface Product {
   tags: string // comma-separated
   features: string // JSON string array
   careInstructions: string
+  shortCode: number | null
   stockXS: number
   stockS: number
   stockM: number
@@ -402,6 +403,7 @@ export default function QuickUploadPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: product.name,
+        shortCode: product.shortCode,
         description: product.description,
         price: finalPrice,
         tags: product.tags,
@@ -613,6 +615,9 @@ export default function QuickUploadPage() {
         </button>
         <p className="text-xs text-gray-400">Draft · {product.id.slice(0, 8)}</p>
       </div>
+
+      {/* shortCode — big, editable. Write this number on the box. */}
+      <ShortCodeRow product={product} setProduct={setProduct} setError={setError} flash={flash} />
 
       {/* images carousel — every image is deletable, including the raw main */}
       <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-2 mb-4 snap-x">
@@ -909,6 +914,96 @@ function TagGroup({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** Big shortCode display + click-to-edit. Lives at the top of the preview. */
+function ShortCodeRow({
+  product,
+  setProduct,
+  setError,
+  flash,
+}: {
+  product: Product
+  setProduct: React.Dispatch<React.SetStateAction<Product | null>>
+  setError: (e: string) => void
+  flash: (msg: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const codeStr = product.shortCode == null ? '???' : String(product.shortCode).padStart(3, '0')
+
+  async function commit() {
+    const cleaned = draft.replace(/\D/g, '')
+    if (!cleaned) {
+      setEditing(false)
+      return
+    }
+    const newCode = parseInt(cleaned, 10)
+    if (newCode < 1 || newCode > 999) {
+      setError('Code must be 1-999')
+      return
+    }
+    if (newCode === product.shortCode) {
+      setEditing(false)
+      return
+    }
+    try {
+      const res = await fetch(`/api/products/${product.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shortCode: newCode }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(data.error || 'Could not change code')
+        return
+      }
+      setProduct((p) => (p ? { ...p, shortCode: newCode } : p))
+      flash(`Code now #${String(newCode).padStart(3, '0')}`)
+      setEditing(false)
+    } catch {
+      setError('Could not change code')
+    }
+  }
+
+  return (
+    <div className="bg-gradient-to-br from-amber-50 to-rose-50 border border-amber-200 rounded-2xl p-3 mb-4 flex items-center gap-3">
+      <div className="flex-1">
+        <p className="text-[10px] uppercase tracking-wider text-amber-800 mb-0.5">
+          Write this on the box
+        </p>
+        {editing ? (
+          <input
+            autoFocus
+            type="text"
+            inputMode="numeric"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit()
+              if (e.key === 'Escape') setEditing(false)
+            }}
+            className="font-mono text-3xl font-bold text-gray-900 w-24 bg-white border border-gray-300 rounded-lg px-2 py-1"
+            placeholder="042"
+          />
+        ) : (
+          <button
+            onClick={() => {
+              setDraft(product.shortCode == null ? '' : String(product.shortCode).padStart(3, '0'))
+              setEditing(true)
+            }}
+            className="font-mono text-4xl font-bold text-gray-900 tracking-wider hover:bg-white/60 px-2 py-0.5 rounded-lg"
+          >
+            #{codeStr}
+          </button>
+        )}
+      </div>
+      <p className="text-[10px] text-amber-700 text-right max-w-[120px] leading-tight">
+        Same number for all sizes. Used to find this product fast at the market.
+      </p>
     </div>
   )
 }
