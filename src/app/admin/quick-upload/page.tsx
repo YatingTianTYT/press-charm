@@ -55,6 +55,7 @@ export default function QuickUploadPage() {
   const [product, setProduct] = useState<Product | null>(null)
   const [uploading, setUploading] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
+  const [generatingHand, setGeneratingHand] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState<string | null>(null)
@@ -96,10 +97,18 @@ export default function QuickUploadPage() {
       const data = await res.json()
       const draft: Product = data.product
 
+      // Kick off Gemini hand-model image generation. This is async on purpose:
+      // it can take 10-30s and we don't want to block the UI. The preview shows
+      // a placeholder; when Gemini returns we splice the new image in.
+      // In trust mode we don't wait either — publish goes ahead, and the hand
+      // model arrives on the already-published product (clients fetching the
+      // PDP will see it once it's there).
+      generateHandModel(draft.id)
+
       if (trustMode) {
         // Skip preview entirely: publish immediately and reset.
         await publishProduct(draft.id)
-        flash(`✓ Published: ${draft.name}`)
+        flash(`✓ Published: ${draft.name} (hand model rendering in background)`)
       } else {
         setProduct(draft)
       }
@@ -107,6 +116,45 @@ export default function QuickUploadPage() {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
+    }
+  }
+
+  // ---- async Gemini hand-model image ----
+  // Fires in the background; resolves into the product images list when done.
+  // Designed not to throw — failures just toast and let the user retry.
+  async function generateHandModel(productId: string) {
+    setGeneratingHand(true)
+    try {
+      const res = await fetch('/api/admin/generate-hand-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `Hand model failed (HTTP ${res.status})`)
+      }
+      const data = await res.json()
+
+      // Splice the new image into local state only if we're still on this
+      // draft (user may have hit Discard during the wait).
+      setProduct((p) => {
+        if (!p || p.id !== productId) return p
+        return {
+          ...p,
+          images: [
+            ...p.images,
+            { id: data.imageId, url: data.url, position: p.images.length },
+          ],
+        }
+      })
+      flash('Hand model added')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Hand model generation failed'
+      // Non-fatal — keep the draft alive
+      setError(msg)
+    } finally {
+      setGeneratingHand(false)
     }
   }
 
@@ -355,6 +403,27 @@ export default function QuickUploadPage() {
             )}
           </div>
         ))}
+
+        {/* hand-model placeholder while Gemini is rendering */}
+        {generatingHand && (
+          <div className="shrink-0 w-48 h-48 rounded-2xl bg-gradient-to-br from-amber-100 to-orange-100 border-2 border-dashed border-amber-300 flex flex-col items-center justify-center text-center px-3">
+            <div className="text-3xl mb-2 animate-pulse">✋</div>
+            <p className="text-sm font-medium text-amber-900">Rendering hand model…</p>
+            <p className="text-xs text-amber-700 mt-1">Gemini ~ 15s</p>
+          </div>
+        )}
+
+        {/* manual retry if Gemini failed */}
+        {!generatingHand && product.images.length < 3 && (
+          <button
+            onClick={() => generateHandModel(product.id)}
+            className="shrink-0 w-32 h-48 border border-amber-300 bg-amber-50 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs"
+          >
+            <span className="text-2xl mb-1">✋</span>
+            Re-render hand
+          </button>
+        )}
+
         {product.images.length < 3 && (
           <button
             onClick={() => extraInputRef.current?.click()}
