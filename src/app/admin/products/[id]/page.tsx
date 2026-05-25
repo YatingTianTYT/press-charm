@@ -80,9 +80,10 @@ export default function EditProduct({ params }: { params: Promise<{ id: string }
     const files = e.target.files
     if (!files) return
 
-    const remaining = 3 - images.length
+    // Cap mirrors MAX_IMAGES_PER_PRODUCT in the API route.
+    const remaining = 6 - images.length
     if (remaining <= 0) {
-      alert('Maximum 3 images allowed')
+      alert('Maximum 6 images allowed')
       return
     }
 
@@ -305,28 +306,37 @@ export default function EditProduct({ params }: { params: Promise<{ id: string }
         {/* Images */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Images ({images.length}/3)
+            Images ({images.length}/6)
           </label>
           <div className="flex flex-wrap gap-3 mb-3">
             {images.map((img, index) => (
-              <div key={index} className="relative group">
+              <div key={index} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={img.url}
                   alt={`Image ${index + 1}`}
                   className="w-24 h-24 rounded-lg object-cover border border-gray-200"
                 />
+                {/* Always-visible delete button (used to be hover-only, which
+                    meant you couldn't tap it on mobile). */}
                 <button
                   type="button"
                   onClick={() => removeImage(index)}
-                  className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-label="Remove image"
+                  className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs flex items-center justify-center shadow active:bg-red-600"
                 >
-                  x
+                  ✕
                 </button>
+                {index === 0 && (
+                  <span className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-gray-900 text-white text-[10px] rounded-full">
+                    Main
+                  </span>
+                )}
               </div>
             ))}
           </div>
           <div className="flex gap-2 flex-wrap">
-            {images.length < 3 && (
+            {images.length < 6 && (
               <label className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors">
                 {uploading ? 'Uploading...' : 'Upload Image'}
                 <input

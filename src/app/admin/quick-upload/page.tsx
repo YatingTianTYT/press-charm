@@ -68,6 +68,11 @@ export default function QuickUploadPage() {
   const [error, setError] = useState('')
   const [toast, setToast] = useState<string | null>(null)
 
+  // Local string for the price field. Stored as a free-form string so the user
+  // can type "30" without it being instantly reformatted to "30.00" mid-keystroke.
+  // Only parsed back to cents on blur / save.
+  const [priceText, setPriceText] = useState('')
+
   // Progress phases for the synchronous upload flow:
   //   idle      → no upload in flight
   //   analyzing → photo uploaded, Claude Vision running (~3-5s)
@@ -87,6 +92,27 @@ export default function QuickUploadPage() {
     if (typeof window === 'undefined') return
     localStorage.setItem(TRUST_MODE_KEY, trustMode ? '1' : '0')
   }, [trustMode])
+
+  // Commit the local string into product.price (in cents). Called on blur and
+  // before save/publish. Tolerates "28", "28.5", "28.50", strips $ and commas.
+  function commitPrice(): number {
+    if (!product) return 0
+    const cleaned = priceText.replace(/[^0-9.]/g, '')
+    const parsed = parseFloat(cleaned)
+    if (!isFinite(parsed) || parsed < 0) return product.price
+    const cents = Math.round(parsed * 100)
+    if (cents !== product.price) patchProduct({ price: cents })
+    return cents
+  }
+
+  // Helper: load a fresh draft into the editor AND sync the priceText buffer.
+  // Use this instead of bare setProduct() when receiving a new product from
+  // an API call, so the price field reflects the new value without React
+  // refmt-while-typing battles.
+  function loadProduct(p: Product) {
+    setProduct(p)
+    setPriceText((p.price / 100).toFixed(2))
+  }
 
   // ---- toast helper ----
   const flash = useCallback((msg: string) => {
@@ -140,7 +166,7 @@ export default function QuickUploadPage() {
         await publishProduct(finalProduct.id)
         flash(`✓ Published: ${finalProduct.name}`)
       } else {
-        setProduct(finalProduct)
+        loadProduct(finalProduct)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -305,7 +331,7 @@ export default function QuickUploadPage() {
         throw new Error(data.error || `Regenerate failed`)
       }
       const data = await res.json()
-      setProduct(data.product)
+      loadProduct(data.product)
       flash('AI re-ran successfully')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Regenerate failed')
@@ -317,13 +343,16 @@ export default function QuickUploadPage() {
   // ---- save (PUT) ----
   async function saveDraft(opts: { silent?: boolean } = {}) {
     if (!product) return null
+    // Flush the priceText buffer before saving so the user doesn't lose an
+    // edit they made and never blurred out of.
+    const finalPrice = commitPrice()
     const res = await fetch(`/api/products/${product.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: product.name,
         description: product.description,
-        price: product.price,
+        price: finalPrice,
         tags: product.tags,
         features: product.features,
         careInstructions: product.careInstructions,
@@ -639,17 +668,17 @@ export default function QuickUploadPage() {
         />
 
         <label className="block text-xs text-gray-500 mb-1">Price (USD)</label>
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-gray-500">$</span>
+        <div className="flex items-center gap-2 mb-3 bg-white border border-gray-200 rounded-lg px-3 py-2">
+          <span className="text-gray-500 text-base">$</span>
           <input
-            type="number"
-            min="0"
-            step="0.5"
-            value={(product.price / 100).toFixed(2)}
-            onChange={(e) =>
-              patchProduct({ price: Math.round(parseFloat(e.target.value || '0') * 100) })
-            }
-            className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-base"
+            type="text"
+            inputMode="decimal"
+            value={priceText}
+            onChange={(e) => setPriceText(e.target.value)}
+            onBlur={commitPrice}
+            onFocus={(e) => e.currentTarget.select()}
+            placeholder="0.00"
+            className="flex-1 text-base outline-none"
           />
         </div>
 
