@@ -20,7 +20,7 @@ const SIZES: Size[] = ['XS', 'S', 'M', 'L']
 const PAYMENT_OPTIONS: { method: PaymentMethod; label: string; emoji: string; sub: string }[] = [
   { method: 'cash', label: 'Cash', emoji: '💵', sub: 'Got the money in hand' },
   { method: 'venmo', label: 'Venmo', emoji: '📱', sub: 'Customer scanned & paid' },
-  { method: 'card', label: 'Tap to Pay', emoji: '💳', sub: 'Stripe card / Apple Pay' },
+  { method: 'card', label: 'Card (Square)', emoji: '💳', sub: 'Already charged on your Square Reader' },
 ]
 
 const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`
@@ -171,21 +171,23 @@ export default function MarketSellPage({ params }: { params: Promise<{ id: strin
               <button
                 key={opt.method}
                 onClick={() => recordSale(opt.method)}
-                disabled={submitting || opt.method === 'card'} // card disabled until Stripe Tap-to-Pay wired
+                disabled={submitting}
                 className="w-full p-5 bg-white border-2 border-gray-200 rounded-2xl text-left hover:border-gray-900 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 <div className="flex items-center gap-4">
                   <span className="text-3xl">{opt.emoji}</span>
                   <div className="flex-1">
                     <p className="text-lg font-semibold text-gray-900">{opt.label}</p>
-                    <p className="text-sm text-gray-500">
-                      {opt.method === 'card' ? 'Coming soon — Stripe Tap-to-Pay' : opt.sub}
-                    </p>
+                    <p className="text-sm text-gray-500">{opt.sub}</p>
                   </div>
                 </div>
               </button>
             ))}
           </div>
+
+          <p className="mt-4 text-center text-xs text-gray-400">
+            Tap "Card" after you swipe on Square — this just records the sale here.
+          </p>
 
           {error && (
             <p className="mt-4 text-center text-red-600 text-sm">{error}</p>

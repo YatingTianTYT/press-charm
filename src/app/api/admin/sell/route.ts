@@ -68,12 +68,9 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     )
   }
-  if (paymentMethod === 'card' && !stripePaymentIntentId) {
-    return NextResponse.json(
-      { error: 'card sales require stripePaymentIntentId' },
-      { status: 400 },
-    )
-  }
+  // Note: 'card' is the manual-entry mode for "I already swiped this on
+  // Square — please record it here too." We do NOT require a Stripe payment
+  // intent because the actual money was collected out-of-band.
 
   // ---- atomic: decrement stock + write Sale row + maybe archive ----
   try {
