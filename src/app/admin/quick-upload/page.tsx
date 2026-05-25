@@ -20,11 +20,19 @@
  *   these batches, I'll set stock from the Today page or Products list."
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 
 type Size = 'XS' | 'S' | 'M' | 'L'
 const SIZES: Size[] = ['XS', 'S', 'M', 'L']
+
+// Mirrors src/lib/claude.ts. Kept inline so this page is self-contained.
+const STYLE_TAGS = ['Floral', 'Glitter', 'French', 'Minimal', 'Art', 'Ombre', 'Gems']
+const VIBE_TAGS = ['Elegant', 'Cute', 'Bold']
+const COLOR_TAGS = [
+  'Pink', 'Red', 'Nude', 'White', 'Black', 'Blue', 'Green',
+  'Purple', 'Gold', 'Silver', 'Multicolor',
+]
 
 interface ImageRow {
   id: string
@@ -328,6 +336,41 @@ export default function QuickUploadPage() {
     })
   }
 
+  function toggleTag(tag: string) {
+    setProduct((p) => {
+      if (!p) return p
+      const current = p.tags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+      const next = current.includes(tag)
+        ? current.filter((t) => t !== tag)
+        : [...current, tag]
+      return { ...p, tags: next.join(', ') }
+    })
+  }
+
+  // Features are stored as a JSON string. The UI works with a parsed array.
+  const featuresList = useMemo<string[]>(() => {
+    if (!product) return []
+    try {
+      const parsed = JSON.parse(product.features || '[]')
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  }, [product])
+
+  function patchFeature(index: number, value: string) {
+    setProduct((p) => {
+      if (!p) return p
+      const list = [...featuresList]
+      while (list.length <= index) list.push('')
+      list[index] = value
+      return { ...p, features: JSON.stringify(list.filter((s) => s !== '' || true)) }
+    })
+  }
+
   // ============== render ==============
 
   // ---- entry screen ----
@@ -558,21 +601,25 @@ export default function QuickUploadPage() {
           className="w-full mb-3 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm leading-relaxed"
         />
 
-        {tagList.length > 0 && (
-          <>
-            <label className="block text-xs text-gray-500 mb-1">Tags</label>
-            <div className="flex flex-wrap gap-1.5">
-              {tagList.map((tag) => (
-                <span
-                  key={tag}
-                  className="px-2.5 py-0.5 bg-white border border-amber-200 rounded-full text-xs text-amber-900"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </>
-        )}
+        <label className="block text-xs text-gray-500 mb-1">Tags</label>
+        <TagGroup
+          label="Style"
+          options={STYLE_TAGS}
+          selected={tagList}
+          onToggle={toggleTag}
+        />
+        <TagGroup
+          label="Vibe"
+          options={VIBE_TAGS}
+          selected={tagList}
+          onToggle={toggleTag}
+        />
+        <TagGroup
+          label="Colors"
+          options={COLOR_TAGS}
+          selected={tagList}
+          onToggle={toggleTag}
+        />
       </div>
 
       {/* stock */}
@@ -612,6 +659,38 @@ export default function QuickUploadPage() {
         </div>
       </div>
 
+      {/* features */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-4">
+        <p className="text-sm font-semibold text-gray-900 mb-2">Features</p>
+        <p className="text-xs text-gray-500 mb-3">
+          Bullet points shown on the product page — handpicked highlights.
+        </p>
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((i) => (
+            <input
+              key={i}
+              type="text"
+              value={featuresList[i] ?? ''}
+              onChange={(e) => patchFeature(i, e.target.value)}
+              placeholder={`Feature ${i + 1}`}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm"
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* care instructions */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-4">
+        <p className="text-sm font-semibold text-gray-900 mb-2">Care instructions</p>
+        <textarea
+          value={product.careInstructions}
+          onChange={(e) => patchProduct({ careInstructions: e.target.value })}
+          rows={2}
+          className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm leading-relaxed"
+          placeholder="e.g. Avoid hot water for 1 hour after application."
+        />
+      </div>
+
       {/* sticky footer with actions */}
       <div className="fixed inset-x-0 bottom-0 bg-white/95 backdrop-blur border-t border-gray-200 p-4 z-10">
         <div className="max-w-md mx-auto flex gap-2">
@@ -636,6 +715,44 @@ export default function QuickUploadPage() {
         {toast && (
           <p className="max-w-md mx-auto mt-2 text-center text-green-700 text-xs">{toast}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+/** One toggleable group of tag chips (Style / Vibe / Colors). */
+function TagGroup({
+  label,
+  options,
+  selected,
+  onToggle,
+}: {
+  label: string
+  options: string[]
+  selected: string[]
+  onToggle: (tag: string) => void
+}) {
+  return (
+    <div className="mb-3">
+      <p className="text-xs text-gray-500 mb-1.5">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((tag) => {
+          const on = selected.includes(tag)
+          return (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onToggle(tag)}
+              className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                on
+                  ? 'bg-gray-900 text-white border-gray-900'
+                  : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              {tag}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
