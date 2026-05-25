@@ -51,10 +51,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Invalid scene: ${scene}` }, { status: 400 })
   }
 
-  // Auto-pick the provider when the caller doesn't specify one: prefer OpenAI
-  // for fidelity, fall back to Gemini if OPENAI_API_KEY isn't set.
+  // Auto-pick the provider: prefer Gemini (OpenAI gpt-image-1 was tested and
+  // its image-edit mode regenerates the nails rather than preserving them,
+  // so it's a worse fit even though the API surface looked promising).
+  // Callers can still force `provider: 'openai'` to override.
   if (!provider) {
-    provider = isOpenAIAvailable() ? 'openai' : isGeminiAvailable() ? 'gemini' : ''
+    provider = isGeminiAvailable() ? 'gemini' : isOpenAIAvailable() ? 'openai' : ''
   }
   if (provider === 'openai' && !isOpenAIAvailable()) {
     return NextResponse.json(

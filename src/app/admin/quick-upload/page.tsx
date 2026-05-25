@@ -672,7 +672,9 @@ export default function QuickUploadPage() {
           </button>
         )}
 
-        {/* full 3-scene set (product + closeup + lifestyle) via OpenAI */}
+        {/* full 3-scene set (product flat-lay + hand closeup + lifestyle).
+            Uses Gemini by default — OpenAI gpt-image-1 was tried and its edit
+            mode tends to redesign the nails rather than preserve them. */}
         {!generatingHand && product.images.length <= 3 && (
           <button
             onClick={generateSceneSet}
@@ -681,7 +683,7 @@ export default function QuickUploadPage() {
             <span className="text-2xl mb-1">🎬</span>
             <span className="font-semibold">Full scene set</span>
             <span className="text-rose-700 mt-0.5 text-[10px]">💅 product · ✋ closeup · ☕ lifestyle</span>
-            <span className="text-rose-600 mt-1 text-[10px]">~30s · OpenAI</span>
+            <span className="text-rose-600 mt-1 text-[10px]">~30s · 3 variants</span>
           </button>
         )}
 
