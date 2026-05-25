@@ -28,7 +28,30 @@ export async function generateHandModelImage(
             },
           },
           {
-            text: 'Take the exact press-on nails from this product photo and place them onto an elegant hand model. You MUST preserve the exact nail design, colors, patterns, and details from the original image — do NOT redesign or reimagine the nails. Extract/cut out the nails as they appear and show them being worn on a realistic female hand with a clean, minimal background. The final image should look like a professional nail salon photo where the model is wearing these exact nails.',
+            // This is an *image transplant* task, NOT an image generation task.
+            // Gemini's default behavior is to "creatively re-imagine" details —
+            // we fight that with very explicit framing + a structured rubric +
+            // an explicit failure mode (return original if you can't preserve).
+            text: `TASK: Image transplant. Place the EXISTING press-on nail design from the input image onto a hand model.
+
+CRITICAL CONSTRAINTS — read carefully:
+1. The nails in the input photo are the FINAL product. Do NOT redesign, restyle, recolor, repaint, or "improve" them.
+2. Copy the nail design pixel-for-pixel: every color, gradient, glitter speck, hand-painted line, gem placement, base shade, tip shape, and length must be IDENTICAL to the input.
+3. Treat the nails as a sticker / decal that you are placing onto fingertips. You may ONLY change orientation/perspective to match the hand pose — never the artwork itself.
+4. If a nail in the input has 3 dots, your output has 3 dots in the same positions. If it has a French tip, your output has the SAME tip line. If it's pink ombré, your output is pink ombré in the same direction.
+
+SCENE COMPOSITION:
+- A relaxed, elegant female hand visible from fingertip to mid-forearm
+- Soft natural lighting, no harsh shadows
+- Clean cream / off-white minimal background (no jewelry, no props)
+- Hand pose should naturally show all 5 nails clearly (e.g. fingers slightly spread, palm down or three-quarter angle)
+- Skin tone: neutral medium-light (similar to indie nail brand reference photos)
+- Photo style: professional product shot, soft matte, magazine-quality
+
+OUTPUT RULES:
+- Output ONLY the image. No text.
+- If you cannot preserve the exact nail design from the input, return the input image UNCHANGED rather than producing a re-imagined version.
+- Do not add a watermark, signature, or text overlay.`,
           },
         ],
       },

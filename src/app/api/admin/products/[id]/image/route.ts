@@ -3,7 +3,10 @@ import { prisma } from '@/lib/prisma'
 import { verifySession } from '@/lib/auth'
 import { uploadImage } from '@/lib/cloudinary'
 
-const MAX_IMAGES_PER_PRODUCT = 3
+// Raised from 3 → 6 so a product can hold: main raw photo + multiple AI
+// hand-model variants + 1-2 supplementary angles. The PWA upload page lets
+// the user prune down to the favorites before publishing.
+const MAX_IMAGES_PER_PRODUCT = 6
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 
 /**

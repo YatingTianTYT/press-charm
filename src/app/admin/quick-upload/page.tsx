@@ -227,20 +227,67 @@ export default function QuickUploadPage() {
     }
   }
 
+  // ---- delete any image (including the main/raw photo) ----
+  // If she removes everything, the entry screen comes back so she can shoot
+  // a new main photo. The DB-level draft sticks around with no images until
+  // she does — that's fine, /admin/products will still let her edit later.
   async function removeImage(imageId: string) {
     if (!product) return
-    if (product.images.length === 1) {
-      setError("Can't remove the main photo — would leave the product imageless")
-      return
-    }
     try {
       const res = await fetch(`/api/admin/products/${product.id}/image?imageId=${imageId}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw new Error('Delete failed')
-      setProduct({ ...product, images: product.images.filter((i) => i.id !== imageId) })
+      const remaining = product.images.filter((i) => i.id !== imageId)
+      // Renormalize positions so the next "add image" picks a free slot
+      const repositioned = remaining.map((img, idx) => ({ ...img, position: idx }))
+      setProduct({ ...product, images: repositioned })
+      flash('Image removed')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
+
+  // ---- spawn N more hand-model variants in parallel ----
+  // Each call hits Gemini once; ~10-15s wall-clock when run in parallel.
+  // Cost: ~$0.04 per variant on Gemini 2.5 Flash Image.
+  async function generateHandModelVariants(count: number) {
+    if (!product) return
+    setGeneratingHand(true)
+    setError('')
+    try {
+      const calls = Array.from({ length: count }, () =>
+        generateHandModelWithTimeout(product.id, 35_000).catch((e) => ({ error: e })),
+      )
+      const results = await Promise.all(calls)
+
+      // Splice in all successful ones; collect any errors for a summary toast.
+      let added = 0
+      const newImages: ImageRow[] = []
+      const errors: string[] = []
+      for (const r of results) {
+        if (r && 'url' in r) {
+          newImages.push(r as ImageRow)
+          added += 1
+        } else if (r && 'error' in r) {
+          errors.push((r as { error: Error }).error.message)
+        }
+      }
+      setProduct((p) =>
+        p
+          ? {
+              ...p,
+              images: [
+                ...p.images,
+                ...newImages.map((img, i) => ({ ...img, position: p.images.length + i })),
+              ],
+            }
+          : p,
+      )
+      if (added > 0) flash(`Added ${added} variant${added > 1 ? 's' : ''}`)
+      if (errors.length) setError(`${errors.length} variant(s) failed: ${errors[0]}`)
+    } finally {
+      setGeneratingHand(false)
     }
   }
 
@@ -487,7 +534,7 @@ export default function QuickUploadPage() {
         <p className="text-xs text-gray-400">Draft · {product.id.slice(0, 8)}</p>
       </div>
 
-      {/* images carousel */}
+      {/* images carousel — every image is deletable, including the raw main */}
       <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-2 mb-4 snap-x">
         {product.images.map((img, idx) => (
           <div key={img.id} className="relative shrink-0 snap-start">
@@ -497,18 +544,18 @@ export default function QuickUploadPage() {
               alt=""
               className="w-48 h-48 object-cover rounded-2xl bg-gray-100"
             />
-            {idx === 0 ? (
+            {idx === 0 && (
               <span className="absolute top-2 left-2 px-2 py-0.5 bg-gray-900 text-white text-xs rounded-full">
                 Main
               </span>
-            ) : (
-              <button
-                onClick={() => removeImage(img.id)}
-                className="absolute top-2 right-2 w-6 h-6 bg-white/90 border border-gray-200 rounded-full text-xs"
-              >
-                ✕
-              </button>
             )}
+            <button
+              onClick={() => removeImage(img.id)}
+              className="absolute top-2 right-2 w-7 h-7 bg-white/95 border border-gray-200 rounded-full text-xs shadow-sm hover:bg-red-50 active:bg-red-100"
+              aria-label="Remove image"
+            >
+              ✕
+            </button>
           </div>
         ))}
 
@@ -521,24 +568,37 @@ export default function QuickUploadPage() {
           </div>
         )}
 
-        {/* manual retry if Gemini failed */}
-        {!generatingHand && product.images.length < 3 && (
+        {/* one fresh hand variant */}
+        {!generatingHand && product.images.length < 6 && (
           <button
             onClick={regenerateHandModel}
-            className="shrink-0 w-32 h-48 border border-amber-300 bg-amber-50 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs"
+            className="shrink-0 w-32 h-48 border border-amber-300 bg-amber-50 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs px-2"
           >
             <span className="text-2xl mb-1">✋</span>
-            Re-render hand
+            <span className="font-medium">+1 hand variant</span>
+            <span className="text-amber-700 mt-0.5 text-[10px]">~15s</span>
           </button>
         )}
 
-        {product.images.length < 3 && (
+        {/* batch of 2 more variants in parallel */}
+        {!generatingHand && product.images.length <= 4 && (
+          <button
+            onClick={() => generateHandModelVariants(2)}
+            className="shrink-0 w-32 h-48 border border-amber-400 bg-gradient-to-br from-amber-100 to-orange-100 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs px-2"
+          >
+            <span className="text-2xl mb-1">✨</span>
+            <span className="font-medium">+2 variants</span>
+            <span className="text-amber-700 mt-0.5 text-[10px]">parallel ~15s</span>
+          </button>
+        )}
+
+        {product.images.length < 6 && (
           <button
             onClick={() => extraInputRef.current?.click()}
             disabled={uploading}
             className="shrink-0 w-48 h-48 border-2 border-dashed border-gray-300 rounded-2xl flex items-center justify-center text-gray-500 hover:border-gray-900 disabled:opacity-50"
           >
-            {uploading ? '…' : '+ Add photo'}
+            {uploading ? '…' : product.images.length === 0 ? '+ Take main photo' : '+ Add photo'}
           </button>
         )}
         <input
