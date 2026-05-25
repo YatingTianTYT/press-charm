@@ -274,6 +274,57 @@ export default function QuickUploadPage() {
     }
   }
 
+  // ---- generate the full 3-scene product image set in parallel ----
+  // Calls the new /api/admin/generate-scene-image once per scene
+  // ('product' / 'closeup' / 'lifestyle'). Defaults to OpenAI gpt-image-1
+  // for fidelity, falls back to Gemini if OPENAI_API_KEY isn't configured.
+  async function generateSceneSet() {
+    if (!product) return
+    setGeneratingHand(true)
+    setError('')
+    try {
+      const scenes = ['product', 'closeup', 'lifestyle'] as const
+      const calls = scenes.map((scene) =>
+        fetch('/api/admin/generate-scene-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId: product.id, scene }),
+        }).then(async (r) => {
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}))
+            throw new Error(j.error || `${scene} failed (HTTP ${r.status})`)
+          }
+          return r.json() as Promise<{ url: string; imageId: string; scene: string }>
+        }),
+      )
+      const results = await Promise.allSettled(calls)
+      const added: ImageRow[] = []
+      const failed: string[] = []
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          added.push({ id: r.value.imageId, url: r.value.url, position: 0 })
+        } else {
+          failed.push(r.reason?.message ?? 'unknown')
+        }
+      }
+      setProduct((p) =>
+        p
+          ? {
+              ...p,
+              images: [
+                ...p.images,
+                ...added.map((img, i) => ({ ...img, position: p.images.length + i })),
+              ],
+            }
+          : p,
+      )
+      if (added.length) flash(`✨ Added ${added.length}/3 scene image${added.length > 1 ? 's' : ''}`)
+      if (failed.length) setError(`${failed.length} failed: ${failed[0]}`)
+    } finally {
+      setGeneratingHand(false)
+    }
+  }
+
   // ---- spawn N more hand-model variants in parallel ----
   // Each call hits Gemini once; ~10-15s wall-clock when run in parallel.
   // Cost: ~$0.04 per variant on Gemini 2.5 Flash Image.
@@ -609,15 +660,28 @@ export default function QuickUploadPage() {
           </button>
         )}
 
-        {/* batch of 2 more variants in parallel */}
+        {/* batch of 2 more hand-model variants in parallel */}
         {!generatingHand && product.images.length <= 4 && (
           <button
             onClick={() => generateHandModelVariants(2)}
             className="shrink-0 w-32 h-48 border border-amber-400 bg-gradient-to-br from-amber-100 to-orange-100 rounded-2xl flex flex-col items-center justify-center text-amber-900 text-xs px-2"
           >
             <span className="text-2xl mb-1">✨</span>
-            <span className="font-medium">+2 variants</span>
+            <span className="font-medium">+2 hand variants</span>
             <span className="text-amber-700 mt-0.5 text-[10px]">parallel ~15s</span>
+          </button>
+        )}
+
+        {/* full 3-scene set (product + closeup + lifestyle) via OpenAI */}
+        {!generatingHand && product.images.length <= 3 && (
+          <button
+            onClick={generateSceneSet}
+            className="shrink-0 w-36 h-48 border-2 border-rose-300 bg-gradient-to-br from-rose-50 to-amber-50 rounded-2xl flex flex-col items-center justify-center text-rose-900 text-xs px-2"
+          >
+            <span className="text-2xl mb-1">🎬</span>
+            <span className="font-semibold">Full scene set</span>
+            <span className="text-rose-700 mt-0.5 text-[10px]">💅 product · ✋ closeup · ☕ lifestyle</span>
+            <span className="text-rose-600 mt-1 text-[10px]">~30s · OpenAI</span>
           </button>
         )}
 
