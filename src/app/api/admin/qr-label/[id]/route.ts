@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import QRCode from 'qrcode'
 import { prisma } from '@/lib/prisma'
 import { verifySession } from '@/lib/auth'
 
@@ -41,12 +42,22 @@ export async function GET(
   const priceStr = `$${(product.price / 100).toFixed(2)}`
   const escapedName = product.name.replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+  // Generate the QR code server-side and inline it as SVG. We tried the
+  // jsdelivr CDN version before but it didn't expose the QRCode global
+  // reliably; this is bulletproof — no client JS, no network dependency.
+  const qrSvg = await QRCode.toString(sellUrl, {
+    type: 'svg',
+    margin: 0,
+    width: 200,
+    color: { dark: '#2C1810', light: '#FAF7F2' },
+    errorCorrectionLevel: 'M',
+  })
+
   const html = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <title>${escapedName} — QR label</title>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
   <style>
     @page { size: 2.25in 3.5in; margin: 0.1in; }
     * { box-sizing: border-box; }
@@ -86,8 +97,8 @@ export async function GET(
       color: #C4896F;
       margin: 2px 0 4px 0;
     }
-    #qr { margin: 2px 0; }
-    #qr canvas { width: 1.2in !important; height: 1.2in !important; }
+    .qr { margin: 2px 0; }
+    .qr svg { width: 1.2in; height: 1.2in; display: block; }
     .hint {
       font-size: 7pt;
       color: #8B6F5E;
@@ -104,16 +115,11 @@ export async function GET(
     ${thumb ? `<img class="thumb" src="${thumb}" alt="" />` : `<div class="thumb"></div>`}
     <div class="name">${escapedName}</div>
     <div class="price">${priceStr}</div>
-    <div id="qr"></div>
+    <div class="qr">${qrSvg}</div>
     <div class="hint">scan to sell</div>
   </div>
   <script>
-    QRCode.toCanvas(
-      document.getElementById('qr'),
-      ${JSON.stringify(sellUrl)},
-      { width: 120, margin: 0, color: { dark: '#2C1810', light: '#FAF7F2' } },
-      function (err) { if (err) console.error(err) }
-    );
+    // (no-op, kept so any existing reference to /api/admin/qr-label still works the same way)
   </script>
 </body>
 </html>`
