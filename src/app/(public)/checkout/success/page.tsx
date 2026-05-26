@@ -24,7 +24,9 @@ interface OrderData {
 
 function SuccessContent() {
   const searchParams = useSearchParams();
-  const sessionId = searchParams.get("session_id");
+  // Square sends back `ref=` in the redirect URL; we used to receive `session_id`
+  // from Stripe. Accept both for backwards compatibility.
+  const ref = searchParams.get("ref") || searchParams.get("session_id");
   const { clearCart } = useCart();
 
   const [order, setOrder] = useState<OrderData | null>(null);
@@ -33,96 +35,46 @@ function SuccessContent() {
   const processedRef = useRef(false);
 
   useEffect(() => {
-    if (!sessionId || processedRef.current) return;
+    if (!ref || processedRef.current) return;
     processedRef.current = true;
 
-    async function createOrder() {
-      try {
-        const sessionRes = await fetch(
-          `/api/checkout/session?session_id=${sessionId}`
-        );
+    // Order creation happens server-side via the Square webhook —
+    // we don't need to POST anything from the client. Just clear the cart
+    // and try to find the resulting Order row (with a couple retries since
+    // the webhook may not have fired yet).
+    async function findOrder() {
+      clearCart();
+      sessionStorage.removeItem("press-charm-discount");
 
-        if (!sessionRes.ok) {
-          const orderRes = await fetch("/api/orders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ stripeSessionId: sessionId }),
-          });
-
-          if (orderRes.ok) {
-            const orderData = await orderRes.json();
-            setOrder(orderData);
-            clearCart();
-            sessionStorage.removeItem("press-charm-discount");
-          } else {
-            setError(
-              "We received your payment. Your order confirmation will be sent to your email."
-            );
-            clearCart();
-            sessionStorage.removeItem("press-charm-discount");
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const res = await fetch(
+            `/api/orders/by-ref?ref=${encodeURIComponent(ref!)}`,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.id) {
+              setOrder(data);
+              setLoading(false);
+              return;
+            }
           }
-          return;
+        } catch {
+          /* swallow and retry */
         }
-
-        const sessionData = await sessionRes.json();
-        const meta = sessionData.metadata;
-
-        if (!meta) {
-          setError(
-            "We received your payment. Your order confirmation will be sent to your email."
-          );
-          clearCart();
-          sessionStorage.removeItem("press-charm-discount");
-          return;
-        }
-
-        const items = JSON.parse(meta.items || "[]");
-
-        const orderRes = await fetch("/api/orders", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            customerName: meta.customerName,
-            email: meta.email,
-            phone: meta.phone || "",
-            addressLine1: meta.addressLine1,
-            addressLine2: meta.addressLine2 || "",
-            city: meta.city,
-            state: meta.state,
-            zipCode: meta.zipCode,
-            items,
-            discountCode: meta.discountCode || undefined,
-            discountAmount: parseInt(meta.discountAmount || "0", 10),
-            stripePaymentId: sessionId,
-          }),
-        });
-
-        if (orderRes.ok) {
-          const orderData = await orderRes.json();
-          setOrder(orderData);
-        } else {
-          setError(
-            "We received your payment. Your order confirmation will be sent to your email."
-          );
-        }
-
-        clearCart();
-        sessionStorage.removeItem("press-charm-discount");
-      } catch {
-        setError(
-          "We received your payment but could not display your order details. Check your email for confirmation."
-        );
-        clearCart();
-        sessionStorage.removeItem("press-charm-discount");
-      } finally {
-        setLoading(false);
+        await new Promise((r) => setTimeout(r, 1500));
       }
+      // Webhook hasn't created the order yet — show a friendly message
+      setError(
+        "We received your payment. Your order confirmation will be sent to your email shortly.",
+      );
+      setLoading(false);
     }
 
-    createOrder();
-  }, [sessionId, clearCart]);
+    findOrder();
+  }, [ref, clearCart]);
 
-  if (!sessionId) {
+  if (!ref) {
     return (
       <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
         <h1 className="font-heading text-2xl font-extralight tracking-[0.1em] uppercase text-[#2C1810]">

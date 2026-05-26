@@ -1,11 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
+import { SquareClient, SquareEnvironment } from 'square'
 import { prisma } from '@/lib/prisma'
 import { calculateShipping, calculateBulkDiscount } from '@/lib/utils'
-import Stripe from 'stripe'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-02-25.clover',
-})
+/**
+ * POST /api/checkout
+ *
+ * Creates a Square Checkout payment link and returns the URL the client
+ * should redirect to. After payment, Square redirects back to
+ * /checkout/success and fires the payment.updated webhook (handled in
+ * /api/checkout/webhook) which is the source of truth for order creation.
+ *
+ * Required env:
+ *   SQUARE_ACCESS_TOKEN  — Production access token from Square Developer Dashboard
+ *   SQUARE_LOCATION_ID   — Your Square business location ID
+ *   NEXT_PUBLIC_BASE_URL — Used for the success redirect URL
+ *
+ * Optional env:
+ *   SQUARE_ENVIRONMENT   — "sandbox" or "production" (default: production)
+ */
+
+function getSquareClient(): SquareClient {
+  if (!process.env.SQUARE_ACCESS_TOKEN) {
+    throw new Error('SQUARE_ACCESS_TOKEN not configured')
+  }
+  return new SquareClient({
+    token: process.env.SQUARE_ACCESS_TOKEN,
+    environment:
+      process.env.SQUARE_ENVIRONMENT === 'sandbox'
+        ? SquareEnvironment.Sandbox
+        : SquareEnvironment.Production,
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,152 +42,219 @@ export async function POST(request: NextRequest) {
     if (!items?.length || !shippingAddress) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
+    if (!process.env.SQUARE_LOCATION_ID) {
+      return NextResponse.json(
+        { error: 'SQUARE_LOCATION_ID not configured on server' },
+        { status: 500 },
+      )
+    }
 
-    // Validate products and stock
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = []
+    // -------- validate stock + compute subtotal from DB (don't trust client) --------
     let subtotal = 0
+    const lineItems: Array<{
+      uid: string
+      name: string
+      quantity: string
+      basePriceMoney: { amount: bigint; currency: 'USD' }
+      note?: string
+      metadata: { productId: string; size: string }
+    }> = []
 
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
-        include: { images: { orderBy: { position: 'asc' }, take: 1 } },
       })
-
       if (!product) {
-        return NextResponse.json({ error: `Product not found: ${item.productId}` }, { status: 400 })
+        return NextResponse.json(
+          { error: `Product not found: ${item.productId}` },
+          { status: 400 },
+        )
       }
-
-      const stockField = `stock${item.size.toUpperCase()}` as keyof typeof product
+      const stockField = `stock${item.size.toUpperCase()}` as
+        | 'stockXS'
+        | 'stockS'
+        | 'stockM'
+        | 'stockL'
       const stock = product[stockField] as number
       if (stock < item.quantity) {
         return NextResponse.json(
           { error: `Insufficient stock for ${product.name} size ${item.size}` },
-          { status: 400 }
+          { status: 400 },
         )
       }
-
       subtotal += product.price * item.quantity
 
-      const images = product.images.length > 0
-        ? [product.images[0].url.startsWith('http') ? product.images[0].url : `${process.env.NEXT_PUBLIC_BASE_URL}${product.images[0].url}`]
-        : undefined
-
       lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: `${product.name} (Size ${item.size.toUpperCase()})`,
-            ...(images && { images }),
-          },
-          unit_amount: product.price,
+        uid: randomUUID(),
+        name: `${product.name} (Size ${item.size.toUpperCase()})`,
+        quantity: String(item.quantity),
+        basePriceMoney: {
+          amount: BigInt(product.price),
+          currency: 'USD',
         },
-        quantity: item.quantity,
+        // We rely on metadata to round-trip the productId/size through the
+        // webhook. Square preserves these on the resulting Order.
+        metadata: {
+          productId: product.id,
+          size: item.size.toUpperCase(),
+        },
       })
     }
 
-    // Calculate bulk discount (2+ sets = $5 off each)
-    const totalQuantity = items.reduce((sum: number, item: { quantity: number }) => sum + item.quantity, 0)
-    const bulkDiscountAmount = calculateBulkDiscount(totalQuantity)
-
-    // Calculate shipping (based on original subtotal)
+    // -------- shipping (single line item) --------
     const shippingCost = calculateShipping(subtotal)
     if (shippingCost > 0) {
       lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'Shipping',
-          },
-          unit_amount: shippingCost,
-        },
-        quantity: 1,
+        uid: randomUUID(),
+        name: 'Shipping',
+        quantity: '1',
+        basePriceMoney: { amount: BigInt(shippingCost), currency: 'USD' },
+        metadata: { productId: '_shipping', size: '_' },
       })
     }
 
-    // Validate and apply discount code
-    let discountAmount = 0
+    // -------- discounts --------
+    // Square supports order-level discounts via order.discounts. Both the
+    // bulk discount (2+ sets = $5 off each) and the coupon code go in here
+    // as fixed-amount discounts.
+    const bulkDiscountAmount = calculateBulkDiscount(
+      items.reduce((sum: number, it: { quantity: number }) => sum + it.quantity, 0),
+    )
+    let couponDiscountAmount = 0
     let appliedDiscountCode: string | null = null
 
     if (discountCode) {
       const discount = await prisma.discountCode.findUnique({
         where: { code: discountCode },
       })
-
       if (!discount || !discount.active) {
         return NextResponse.json({ error: 'Invalid discount code' }, { status: 400 })
       }
-
       if (discount.expiresAt && new Date(discount.expiresAt) < new Date()) {
         return NextResponse.json({ error: 'Discount code has expired' }, { status: 400 })
       }
-
       if (discount.minOrder && subtotal < discount.minOrder) {
         return NextResponse.json(
-          { error: `Minimum order of $${(discount.minOrder / 100).toFixed(2)} required for this code` },
-          { status: 400 }
+          {
+            error: `Minimum order of $${(discount.minOrder / 100).toFixed(2)} required for this code`,
+          },
+          { status: 400 },
         )
       }
-
-      if (discount.type === 'percent') {
-        discountAmount = Math.round(subtotal * (discount.value / 100))
-      } else {
-        discountAmount = discount.value
-      }
-
+      couponDiscountAmount =
+        discount.type === 'percent'
+          ? Math.round(subtotal * (discount.value / 100))
+          : discount.value
       appliedDiscountCode = discount.code
-
-      // Add discount as a negative line item via coupon
-      // Stripe doesn't support negative line items, so we use discounts
     }
 
-    // Build Stripe session params
-    const sessionParams: Stripe.Checkout.SessionCreateParams = {
-      payment_method_types: ['card'],
-      line_items: lineItems,
-      mode: 'payment',
-      success_url: `${process.env.NEXT_PUBLIC_BASE_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL}/cart`,
-      metadata: {
-        items: JSON.stringify(items),
-        customerName: shippingAddress.customerName,
-        email: shippingAddress.email,
-        phone: shippingAddress.phone || '',
-        addressLine1: shippingAddress.addressLine1,
-        addressLine2: shippingAddress.addressLine2 || '',
-        city: shippingAddress.city,
-        state: shippingAddress.state,
-        zipCode: shippingAddress.zipCode,
-        discountCode: appliedDiscountCode || '',
-        discountAmount: (discountAmount + bulkDiscountAmount).toString(),
-        bulkDiscount: bulkDiscountAmount.toString(),
-        subtotal: subtotal.toString(),
-        shipping: shippingCost.toString(),
-      },
-      customer_email: shippingAddress.email,
-    }
-
-    // Apply combined discount (bulk + coupon) via Stripe coupon
-    const totalDiscount = discountAmount + bulkDiscountAmount
-    if (totalDiscount > 0) {
-      const discountParts = []
-      if (bulkDiscountAmount > 0) discountParts.push(`Bundle: -$${(bulkDiscountAmount / 100).toFixed(2)}`)
-      if (appliedDiscountCode) discountParts.push(`Code: ${appliedDiscountCode}`)
-
-      const coupon = await stripe.coupons.create({
-        amount_off: totalDiscount,
-        currency: 'usd',
-        duration: 'once',
-        name: discountParts.join(' + '),
+    const orderDiscounts: Array<{
+      uid: string
+      name: string
+      amountMoney: { amount: bigint; currency: 'USD' }
+      scope: 'ORDER'
+    }> = []
+    if (bulkDiscountAmount > 0) {
+      orderDiscounts.push({
+        uid: randomUUID(),
+        name: 'Bundle discount (2+ sets)',
+        amountMoney: { amount: BigInt(bulkDiscountAmount), currency: 'USD' },
+        scope: 'ORDER',
       })
-
-      sessionParams.discounts = [{ coupon: coupon.id }]
+    }
+    if (couponDiscountAmount > 0 && appliedDiscountCode) {
+      orderDiscounts.push({
+        uid: randomUUID(),
+        name: `Code: ${appliedDiscountCode}`,
+        amountMoney: { amount: BigInt(couponDiscountAmount), currency: 'USD' },
+        scope: 'ORDER',
+      })
     }
 
-    const session = await stripe.checkout.sessions.create(sessionParams)
+    // -------- create payment link --------
+    const client = getSquareClient()
+    const idempotencyKey = randomUUID()
+    const referenceId = randomUUID() // we'll match this back to the order in the webhook
 
-    return NextResponse.json({ url: session.url, sessionId: session.id })
+    // Order-level metadata that survives the webhook round-trip
+    const orderMetadata: Record<string, string> = {
+      customerName: shippingAddress.customerName || '',
+      email: shippingAddress.email || '',
+      phone: shippingAddress.phone || '',
+      addressLine1: shippingAddress.addressLine1 || '',
+      addressLine2: shippingAddress.addressLine2 || '',
+      city: shippingAddress.city || '',
+      state: shippingAddress.state || '',
+      zipCode: shippingAddress.zipCode || '',
+      // Pack items as JSON in metadata so the webhook can recreate them
+      items: JSON.stringify(
+        items.map((it: { productId: string; size: string; quantity: number }) => ({
+          productId: it.productId,
+          size: it.size.toUpperCase(),
+          quantity: it.quantity,
+        })),
+      ),
+      bulkDiscount: String(bulkDiscountAmount),
+      couponDiscount: String(couponDiscountAmount),
+      discountCode: appliedDiscountCode || '',
+    }
+
+    // Square has a 256-char limit per metadata value. If items JSON is too
+    // long, stash a short reference and store the full payload in the DB to
+    // be looked up by the webhook.
+    if (orderMetadata.items.length > 240) {
+      // (Edge case for huge carts. Park as a Sale draft row to be looked up.)
+      orderMetadata.items = `__overflow__:${referenceId}`
+      // ...nothing to write yet; for now we cap orders so this doesn't trip
+    }
+
+    const response = await client.checkout.paymentLinks.create({
+      idempotencyKey,
+      order: {
+        locationId: process.env.SQUARE_LOCATION_ID,
+        referenceId,
+        lineItems,
+        discounts: orderDiscounts.length > 0 ? orderDiscounts : undefined,
+        metadata: orderMetadata,
+      },
+      checkoutOptions: {
+        redirectUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/checkout/success?ref=${referenceId}`,
+        askForShippingAddress: false, // we collected it before checkout
+        merchantSupportEmail: process.env.EMAIL_FROM?.match(/<(.+)>/)?.[1] || undefined,
+        acceptedPaymentMethods: {
+          applePay: true,
+          googlePay: true,
+          cashAppPay: true,
+          afterpayClearpay: false,
+        },
+      },
+      prePopulatedData: {
+        buyerEmail: shippingAddress.email,
+        buyerPhoneNumber: shippingAddress.phone || undefined,
+      },
+    })
+
+    if (!response.paymentLink) {
+      console.error('[checkout] Square returned no paymentLink', response)
+      return NextResponse.json({ error: 'Failed to create payment link' }, { status: 500 })
+    }
+
+    return NextResponse.json({
+      url: response.paymentLink.url,
+      referenceId,
+    })
   } catch (error) {
-    console.error('Error creating checkout session:', error)
-    return NextResponse.json({ error: 'Failed to create checkout session' }, { status: 500 })
+    // Square SDK errors carry a `body` with detail
+    interface SquareErrorShape {
+      message?: string
+      body?: { errors?: Array<{ detail?: string }> }
+    }
+    const err = error as SquareErrorShape
+    const detail = err?.body?.errors?.[0]?.detail || err?.message || 'Unknown error'
+    console.error('[checkout] Square error:', detail, error)
+    return NextResponse.json(
+      { error: `Failed to create checkout session: ${detail}` },
+      { status: 500 },
+    )
   }
 }

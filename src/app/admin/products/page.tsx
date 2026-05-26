@@ -11,6 +11,7 @@ interface ProductImage {
 
 interface Product {
   id: string
+  shortCode: number | null
   name: string
   price: number
   compareAtPrice: number | null
@@ -22,6 +23,7 @@ interface Product {
   stockM: number
   stockL: number
   status: string
+  archived: boolean
   images: ProductImage[]
 }
 
@@ -100,6 +102,7 @@ export default function AdminProducts() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-500">#</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Image</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Name</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">Price</th>
@@ -117,6 +120,13 @@ export default function AdminProducts() {
 
                   return (
                     <tr key={product.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <span className="font-mono font-semibold text-gray-900">
+                          {product.shortCode != null
+                            ? `#${String(product.shortCode).padStart(3, '0')}`
+                            : '—'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">
                         {thumbnail ? (
                           <img
