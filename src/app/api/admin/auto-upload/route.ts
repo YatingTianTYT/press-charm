@@ -33,12 +33,39 @@ export async function POST(request: NextRequest) {
     // Upload to Cloudinary
     const imageUrl = await uploadImage(buffer, 'press-charm/products')
 
-    // Get base64 for Claude Vision
-    const imageBase64 = buffer.toString('base64')
-    const mimeType = file.type || 'image/jpeg'
+    // ?skipClaude=1 means the client (PWA Quick Upload) will run Claude
+    // Vision via /api/admin/products/[id]/regenerate-listing IN PARALLEL
+    // with Gemini scene generation. This route just creates a stub product
+    // with placeholder fields, so it returns in ~3s instead of ~8s.
+    //
+    // Default (no query) preserves the old behavior so the legacy V3 watcher
+    // and the GUI Upload page (if anyone still uses it) keep working.
+    const skipClaude = request.nextUrl.searchParams.get('skipClaude') === '1'
 
-    // Call Claude Vision
-    const aiResponse = await analyzeNailImage(imageBase64, mimeType)
+    let aiFields: {
+      title: string
+      description: string
+      price: number
+      tags: string[]
+      features: string[]
+      careInstructions: string
+    }
+    if (skipClaude) {
+      // Placeholder — the parallel regenerate-listing call will overwrite
+      // these almost immediately.
+      aiFields = {
+        title: 'New product',
+        description: '',
+        price: 2800, // $28.00 default; user will edit
+        tags: [],
+        features: [],
+        careInstructions: '',
+      }
+    } else {
+      const imageBase64 = buffer.toString('base64')
+      const mimeType = file.type || 'image/jpeg'
+      aiFields = await analyzeNailImage(imageBase64, mimeType)
+    }
 
     // Optional caller-supplied overrides (PWA quick-upload sends these).
     // The legacy V3 watcher doesn't, so we fall back to safe zeros.
@@ -57,13 +84,13 @@ export async function POST(request: NextRequest) {
     // defaults, which created phantom inventory for sizes you hadn't made.
     const product = await prisma.product.create({
       data: {
-        name: aiResponse.title,
-        description: aiResponse.description,
-        price: aiResponse.price,
-        tags: aiResponse.tags.join(', '),
+        name: aiFields.title,
+        description: aiFields.description,
+        price: aiFields.price,
+        tags: aiFields.tags.join(', '),
         status: 'draft',
-        features: JSON.stringify(aiResponse.features),
-        careInstructions: aiResponse.careInstructions,
+        features: JSON.stringify(aiFields.features),
+        careInstructions: aiFields.careInstructions,
         shortCode,
         stockXS,
         stockS,
@@ -80,7 +107,10 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    return NextResponse.json({ product, aiResponse }, { status: 201 })
+    return NextResponse.json(
+      { product, aiResponse: aiFields, skippedClaude: skipClaude },
+      { status: 201 },
+    )
   } catch (error) {
     console.error('Error in auto-upload:', error)
     return NextResponse.json({ error: 'Failed to process image' }, { status: 500 })

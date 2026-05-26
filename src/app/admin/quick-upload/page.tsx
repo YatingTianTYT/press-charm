@@ -123,15 +123,16 @@ export default function QuickUploadPage() {
     setTimeout(() => setToast(null), 2500)
   }, [])
 
-  // ---- main photo upload (synchronous: wait for Claude AND 3 scene images) ----
+  // ---- main photo upload (Claude + 3 Gemini all in parallel) ----
   // Workflow:
-  //   1. Upload + Claude Vision → draft product
-  //   2. Fire 3 Gemini Pro calls in parallel: product / closeup / lifestyle
-  //   3. Wait for all 3 → preview screen shows 4 images (original + 3 AI)
+  //   1. Upload to Cloudinary + create empty Product (fast, ~3s)
+  //   2. In parallel, kick off 4 jobs:
+  //        - Claude Vision (regenerate-listing) for name/price/desc/tags
+  //        - Gemini Pro × 3: product / closeup / lifestyle
+  //      Wall-clock = max of Claude (~5s) and Gemini (~22s) = ~22s
+  //   3. Refetch product to merge all results, then setProduct
   //
-  // Parallel total time ≈ time of a single Gemini Pro call (~22-25s),
-  // not the sum. Failed scenes just don't show up; user can manually
-  // retry with the +1 hand variant button.
+  // Failed scenes don't block — preview just shows fewer images and a toast.
   async function handleMainPhoto(file: File) {
     if (!file) return
     setError('')
@@ -139,18 +140,33 @@ export default function QuickUploadPage() {
     setPhase('analyzing')
     setScenesDone(0)
     try {
-      // Step 1: Claude Vision — turns the photo into a draft listing
+      // Step 1: upload + create barebones product (~3s, no Claude)
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch('/api/admin/auto-upload', { method: 'POST', body: form })
+      const res = await fetch('/api/admin/auto-upload?skipClaude=1', {
+        method: 'POST',
+        body: form,
+      })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || `Upload failed: HTTP ${res.status}`)
       }
-      const { product: draft } = await res.json() as { product: Product }
+      const { product: draft } = (await res.json()) as { product: Product }
 
-      // Step 2: Gemini Pro × 3 — product flat-lay, hand close-up, lifestyle
+      // Step 2: Claude + 3 Gemini scenes all in parallel
       setPhase('rendering')
+
+      const claudeCall = fetch(
+        `/api/admin/products/${draft.id}/regenerate-listing`,
+        { method: 'POST' },
+      ).then(async (r) => {
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}))
+          throw new Error(j.error || `claude HTTP ${r.status}`)
+        }
+        return r.json() as Promise<{ product: Product }>
+      })
+
       const scenes = ['product', 'closeup', 'lifestyle'] as const
       const sceneCalls = scenes.map((scene) =>
         fetch('/api/admin/generate-scene-image', {
@@ -163,7 +179,11 @@ export default function QuickUploadPage() {
               const j = await r.json().catch(() => ({}))
               throw new Error(j.error || `${scene} HTTP ${r.status}`)
             }
-            return r.json() as Promise<{ url: string; imageId: string; scene: string }>
+            return r.json() as Promise<{
+              url: string
+              imageId: string
+              scene: string
+            }>
           })
           .then((data) => {
             setScenesDone((n) => n + 1)
@@ -171,48 +191,43 @@ export default function QuickUploadPage() {
           }),
       )
 
-      const results = await Promise.allSettled(sceneCalls)
+      // Wait for ALL 4 to finish (or fail) — Claude separated so we can
+      // surface its result differently than scenes
+      const [claudeResult, ...sceneResults] = await Promise.allSettled([
+        claudeCall,
+        ...sceneCalls,
+      ])
 
-      // Splice in successful scenes; collect failures for the preview banner
-      let finalProduct: Product = draft
-      const added: ImageRow[] = []
+      // Refetch the product from DB so we get the merged state (Claude
+      // updates may have raced with scene-image inserts, fetching once
+      // at the end avoids stale data)
+      const fresh = await fetch(`/api/products/${draft.id}`).then((r) => r.json())
+
       const failed: string[] = []
-      for (const r of results) {
-        if (r.status === 'fulfilled') {
-          added.push({
-            id: r.value.imageId,
-            url: r.value.url,
-            position: 0, // will be renormalized below
-          })
-        } else {
-          failed.push(r.reason?.message ?? 'unknown')
-        }
+      if (claudeResult.status === 'rejected') {
+        failed.push(`Claude: ${claudeResult.reason?.message ?? 'unknown'}`)
       }
-      if (added.length) {
-        finalProduct = {
-          ...draft,
-          images: [
-            ...draft.images,
-            ...added.map((img, i) => ({
-              ...img,
-              position: draft.images.length + i,
-            })),
-          ],
-        }
+      let okScenes = 0
+      for (const r of sceneResults) {
+        if (r.status === 'fulfilled') okScenes += 1
+        else failed.push(r.reason?.message ?? 'unknown scene')
       }
       if (failed.length) {
-        // Non-fatal — let the user see the preview and decide what to do
-        flash(`⚠ ${failed.length}/3 scene${failed.length > 1 ? 's' : ''} failed — use Re-render`)
+        flash(`⚠ ${failed.length} step${failed.length > 1 ? 's' : ''} failed — see preview`)
+      }
+      if (okScenes < 3) {
+        // Make sure the UI shows the final count even if a scene rejected
+        setScenesDone(okScenes)
       }
 
       setPhase('done')
 
       if (trustMode) {
         // Skip preview entirely: publish whatever we have and reset.
-        await publishProduct(finalProduct.id)
-        flash(`✓ Published: ${finalProduct.name}`)
+        await publishProduct(fresh.id)
+        flash(`✓ Published: ${fresh.name}`)
       } else {
-        loadProduct(finalProduct)
+        loadProduct(fresh)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -549,36 +564,41 @@ export default function QuickUploadPage() {
 
   // ---- entry screen ----
   if (!product) {
-    // Full-screen progress while we wait for Claude + 3 scene Gemini calls
+    // Full-screen progress: 4 AI jobs run in parallel after the upload step
     if (uploading || phase === 'analyzing' || phase === 'rendering') {
       return (
         <div className="max-w-md mx-auto pt-24 text-center">
           <div className="text-7xl mb-6 animate-pulse">
-            {phase === 'rendering' ? '🎬' : '🪞'}
+            {phase === 'rendering' ? '🎬' : '☁️'}
           </div>
           <h2 className="text-2xl font-semibold text-gray-900 mb-2">
             {phase === 'rendering'
-              ? `Rendering scene images… ${scenesDone}/3`
-              : 'Analyzing your nails…'}
+              ? `AI cooking… ${scenesDone}/3 scenes ready`
+              : 'Uploading photo…'}
           </h2>
           <p className="text-gray-500 mb-8 leading-relaxed">
             {phase === 'rendering'
-              ? 'Gemini Pro is generating 3 photos in parallel: product, hand close-up, and lifestyle. ~25 seconds total.'
-              : 'Claude is writing the product name, price, and description.'}
+              ? 'Claude (listing) + Gemini Pro × 3 (scenes) are all running in parallel. ~22 seconds total.'
+              : 'Sending your photo to Cloudinary.'}
           </p>
 
           <div className="space-y-2 max-w-xs mx-auto text-left">
             <Step
-              label="Analyze nails (Claude)"
+              label="Upload photo"
               done={phase === 'rendering' || phase === 'done'}
               active={phase === 'analyzing'}
             />
             {/*
-              All 3 scene calls fire in parallel — but Promise.allSettled returns
-              them as they resolve in completion order, not which-scene order.
-              So we just show how many are done overall, and any not-yet-done
-              entries pulse to indicate they're still being rendered.
+              Claude + 3 scene calls all fire in parallel. We only track
+              scene completion via setScenesDone — Claude finishing isn't
+              individually tracked, but it's almost always faster than
+              Gemini so we lump it in with "rendering".
             */}
+            <Step
+              label="📝 Claude writes the listing"
+              done={phase === 'done'}
+              active={phase === 'rendering'}
+            />
             {[
               { label: '💅 Product flat-lay' },
               { label: '✋ Hand close-up' },
