@@ -265,14 +265,30 @@ export async function POST(request: NextRequest) {
       referenceId,
     })
   } catch (error) {
-    // Square SDK errors carry a `body` with detail
+    // Square SDK errors carry a `body` with detail. Dump the full set of
+    // errors so we can see exactly which field is malformed.
+    interface SquareErrorDetail {
+      category?: string
+      code?: string
+      detail?: string
+      field?: string
+    }
     interface SquareErrorShape {
       message?: string
-      body?: { errors?: Array<{ detail?: string }> }
+      body?: { errors?: SquareErrorDetail[] }
+      errors?: SquareErrorDetail[]
+      statusCode?: number
     }
     const err = error as SquareErrorShape
-    const detail = err?.body?.errors?.[0]?.detail || err?.message || 'Unknown error'
-    console.error('[checkout] Square error:', detail, error)
+    const allErrors: SquareErrorDetail[] =
+      err?.body?.errors || err?.errors || []
+    // Format every Square error inline so we can spot the field that's failing
+    const formatted = allErrors
+      .map((e) => `${e.field || e.code || 'error'}: ${e.detail}`)
+      .join('; ')
+    const detail = formatted || err?.message || 'Unknown error'
+    console.error('[checkout] Square errors (full):', JSON.stringify(allErrors, null, 2))
+    console.error('[checkout] Original error object:', error)
     return NextResponse.json(
       { error: `Failed to create checkout session: ${detail}` },
       { status: 500 },
