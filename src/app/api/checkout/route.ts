@@ -181,16 +181,11 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = randomUUID()
     const referenceId = randomUUID() // we'll match this back to the order in the webhook
 
-    // Order-level metadata that survives the webhook round-trip
+    // Order-level metadata that survives the webhook round-trip.
+    // Square rejects metadata VALUES that are empty strings — they require
+    // either a non-empty string or the key to be omitted. Build the object
+    // conditionally so empty fields don't poison the request.
     const orderMetadata: Record<string, string> = {
-      customerName: shippingAddress.customerName || '',
-      email: shippingAddress.email || '',
-      phone: shippingAddress.phone || '',
-      addressLine1: shippingAddress.addressLine1 || '',
-      addressLine2: shippingAddress.addressLine2 || '',
-      city: shippingAddress.city || '',
-      state: shippingAddress.state || '',
-      zipCode: shippingAddress.zipCode || '',
       // Pack items as JSON in metadata so the webhook can recreate them
       items: JSON.stringify(
         items.map((it: { productId: string; size: string; quantity: number }) => ({
@@ -201,8 +196,20 @@ export async function POST(request: NextRequest) {
       ),
       bulkDiscount: String(bulkDiscountAmount),
       couponDiscount: String(couponDiscountAmount),
-      discountCode: appliedDiscountCode || '',
     }
+    // Only include shipping/customer fields if they're non-empty
+    const maybeAdd = (key: string, val: unknown) => {
+      if (typeof val === 'string' && val.trim()) orderMetadata[key] = val
+    }
+    maybeAdd('customerName', shippingAddress.customerName)
+    maybeAdd('email', shippingAddress.email)
+    maybeAdd('phone', shippingAddress.phone)
+    maybeAdd('addressLine1', shippingAddress.addressLine1)
+    maybeAdd('addressLine2', shippingAddress.addressLine2)
+    maybeAdd('city', shippingAddress.city)
+    maybeAdd('state', shippingAddress.state)
+    maybeAdd('zipCode', shippingAddress.zipCode)
+    if (appliedDiscountCode) orderMetadata.discountCode = appliedDiscountCode
 
     // Square has a 256-char limit per metadata value. If items JSON is too
     // long, stash a short reference and store the full payload in the DB to
