@@ -77,9 +77,11 @@ export default function QuickUploadPage() {
   // Progress phases for the synchronous upload flow:
   //   idle      → no upload in flight
   //   analyzing → photo uploaded, Claude Vision running (~3-5s)
-  //   rendering → Claude done, Gemini hand model running (~10-20s)
+  //   rendering → 3 Gemini Pro scene images generating in parallel (~22-25s)
   //   done      → success, transitioning to preview
   const [phase, setPhase] = useState<'idle' | 'analyzing' | 'rendering' | 'done'>('idle')
+  // Counts of scene images completed during the rendering phase (0-3)
+  const [scenesDone, setScenesDone] = useState(0)
 
   const mainInputRef = useRef<HTMLInputElement>(null)
   const extraInputRef = useRef<HTMLInputElement>(null)
@@ -121,16 +123,21 @@ export default function QuickUploadPage() {
     setTimeout(() => setToast(null), 2500)
   }, [])
 
-  // ---- main photo upload (synchronous: wait for Claude AND Gemini) ----
-  // User asked to wait for the hand model before being shown the preview, so
-  // both AI steps complete before we reveal the editing screen. If Gemini
-  // fails or takes >35s we still show the preview so they can recover with
-  // the manual "Re-render hand" button.
+  // ---- main photo upload (synchronous: wait for Claude AND 3 scene images) ----
+  // Workflow:
+  //   1. Upload + Claude Vision → draft product
+  //   2. Fire 3 Gemini Pro calls in parallel: product / closeup / lifestyle
+  //   3. Wait for all 3 → preview screen shows 4 images (original + 3 AI)
+  //
+  // Parallel total time ≈ time of a single Gemini Pro call (~22-25s),
+  // not the sum. Failed scenes just don't show up; user can manually
+  // retry with the +1 hand variant button.
   async function handleMainPhoto(file: File) {
     if (!file) return
     setError('')
     setUploading(true)
     setPhase('analyzing')
+    setScenesDone(0)
     try {
       // Step 1: Claude Vision — turns the photo into a draft listing
       const form = new FormData()
@@ -142,22 +149,60 @@ export default function QuickUploadPage() {
       }
       const { product: draft } = await res.json() as { product: Product }
 
-      // Step 2: Gemini — render the hand-model image. Bounded by 35s so a
-      // hung Gemini call doesn't strand the user.
+      // Step 2: Gemini Pro × 3 — product flat-lay, hand close-up, lifestyle
       setPhase('rendering')
+      const scenes = ['product', 'closeup', 'lifestyle'] as const
+      const sceneCalls = scenes.map((scene) =>
+        fetch('/api/admin/generate-scene-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId: draft.id, scene }),
+        })
+          .then(async (r) => {
+            if (!r.ok) {
+              const j = await r.json().catch(() => ({}))
+              throw new Error(j.error || `${scene} HTTP ${r.status}`)
+            }
+            return r.json() as Promise<{ url: string; imageId: string; scene: string }>
+          })
+          .then((data) => {
+            setScenesDone((n) => n + 1)
+            return data
+          }),
+      )
+
+      const results = await Promise.allSettled(sceneCalls)
+
+      // Splice in successful scenes; collect failures for the preview banner
       let finalProduct: Product = draft
-      try {
-        const handImage = await generateHandModelWithTimeout(draft.id, 35_000)
-        if (handImage) {
-          finalProduct = {
-            ...draft,
-            images: [...draft.images, handImage],
-          }
+      const added: ImageRow[] = []
+      const failed: string[] = []
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          added.push({
+            id: r.value.imageId,
+            url: r.value.url,
+            position: 0, // will be renormalized below
+          })
+        } else {
+          failed.push(r.reason?.message ?? 'unknown')
         }
-      } catch (handErr) {
-        // Non-fatal: we still want the user to see the preview and recover
-        const msg = handErr instanceof Error ? handErr.message : 'Hand model failed'
-        flash(`⚠ ${msg} — use Re-render to retry`)
+      }
+      if (added.length) {
+        finalProduct = {
+          ...draft,
+          images: [
+            ...draft.images,
+            ...added.map((img, i) => ({
+              ...img,
+              position: draft.images.length + i,
+            })),
+          ],
+        }
+      }
+      if (failed.length) {
+        // Non-fatal — let the user see the preview and decide what to do
+        flash(`⚠ ${failed.length}/3 scene${failed.length > 1 ? 's' : ''} failed — use Re-render`)
       }
 
       setPhase('done')
@@ -504,19 +549,21 @@ export default function QuickUploadPage() {
 
   // ---- entry screen ----
   if (!product) {
-    // Full-screen progress while we wait for Claude + Gemini
+    // Full-screen progress while we wait for Claude + 3 scene Gemini calls
     if (uploading || phase === 'analyzing' || phase === 'rendering') {
       return (
         <div className="max-w-md mx-auto pt-24 text-center">
           <div className="text-7xl mb-6 animate-pulse">
-            {phase === 'rendering' ? '✋' : '🪞'}
+            {phase === 'rendering' ? '🎬' : '🪞'}
           </div>
           <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-            {phase === 'rendering' ? 'Rendering hand model…' : 'Analyzing your nails…'}
+            {phase === 'rendering'
+              ? `Rendering scene images… ${scenesDone}/3`
+              : 'Analyzing your nails…'}
           </h2>
           <p className="text-gray-500 mb-8 leading-relaxed">
             {phase === 'rendering'
-              ? 'Gemini is generating a hand-model photo. Usually 10–20 seconds.'
+              ? 'Gemini Pro is generating 3 photos in parallel: product, hand close-up, and lifestyle. ~25 seconds total.'
               : 'Claude is writing the product name, price, and description.'}
           </p>
 
@@ -526,11 +573,24 @@ export default function QuickUploadPage() {
               done={phase === 'rendering' || phase === 'done'}
               active={phase === 'analyzing'}
             />
-            <Step
-              label="Render hand model (Gemini)"
-              done={phase === 'done'}
-              active={phase === 'rendering'}
-            />
+            {/*
+              All 3 scene calls fire in parallel — but Promise.allSettled returns
+              them as they resolve in completion order, not which-scene order.
+              So we just show how many are done overall, and any not-yet-done
+              entries pulse to indicate they're still being rendered.
+            */}
+            {[
+              { label: '💅 Product flat-lay' },
+              { label: '✋ Hand close-up' },
+              { label: '☕ Lifestyle scene' },
+            ].map((s, idx) => (
+              <Step
+                key={idx}
+                label={s.label}
+                done={phase === 'done' || scenesDone > idx}
+                active={phase === 'rendering' && scenesDone <= idx}
+              />
+            ))}
           </div>
         </div>
       )
