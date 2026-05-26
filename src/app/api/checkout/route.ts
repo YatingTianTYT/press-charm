@@ -105,13 +105,15 @@ export async function POST(request: NextRequest) {
     }
 
     // -------- shipping (single line item) --------
-    const shippingCost = calculateShipping(subtotal)
-    if (shippingCost > 0) {
+    // (shippingCost is recomputed below for the final total — we just need
+    // it here to decide whether to add a Shipping line item.)
+    const shippingForLineItem = calculateShipping(subtotal)
+    if (shippingForLineItem > 0) {
       lineItems.push({
         uid: randomUUID(),
         name: 'Shipping',
         quantity: '1',
-        basePriceMoney: { amount: BigInt(shippingCost), currency: 'USD' },
+        basePriceMoney: { amount: BigInt(shippingForLineItem), currency: 'USD' },
         metadata: { productId: '_shipping', size: '_' },
       })
     }
