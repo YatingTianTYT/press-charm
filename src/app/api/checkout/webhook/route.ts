@@ -81,6 +81,9 @@ export async function POST(request: NextRequest) {
   }
 
   // ---- parse event ----
+  // IMPORTANT: Square webhook payloads use snake_case keys (the API itself
+  // also uses snake_case). DO NOT change these to camelCase — that's what
+  // caused the silent "skipping" bug.
   let event: {
     type: string
     data: {
@@ -90,8 +93,8 @@ export async function POST(request: NextRequest) {
         payment?: {
           id: string
           status: string
-          orderId?: string
-          referenceId?: string
+          order_id?: string
+          reference_id?: string
         }
       }
     }
@@ -112,8 +115,9 @@ export async function POST(request: NextRequest) {
     console.log(`[webhook] payment status=${payment?.status}, skipping`)
     return NextResponse.json({ received: true })
   }
-  if (!payment.orderId) {
-    console.log('[webhook] payment has no orderId, skipping')
+  const paymentOrderId = payment.order_id
+  if (!paymentOrderId) {
+    console.log('[webhook] payment has no order_id, skipping')
     return NextResponse.json({ received: true })
   }
 
@@ -121,7 +125,7 @@ export async function POST(request: NextRequest) {
   let squareOrder
   try {
     const client = squareClient()
-    const orderRes = await client.orders.get({ orderId: payment.orderId })
+    const orderRes = await client.orders.get({ orderId: paymentOrderId })
     squareOrder = orderRes.order
   } catch (err) {
     console.error('[webhook] failed to fetch Square order:', err)
@@ -135,7 +139,9 @@ export async function POST(request: NextRequest) {
   // We use the referenceId (set during /api/checkout) as the canonical key
   // for idempotency AND for the success-page lookup. The buyer's redirect
   // URL has ?ref=<referenceId>.
-  const refKey = squareOrder.referenceId || payment.referenceId || payment.orderId
+  // squareOrder is from the SDK so its fields ARE camelCase. payment is from
+  // the raw webhook JSON so its fields are snake_case.
+  const refKey = squareOrder.referenceId || payment.reference_id || paymentOrderId
 
   const existing = await prisma.order.findFirst({
     where: { stripePaymentId: refKey },
@@ -277,7 +283,7 @@ export async function POST(request: NextRequest) {
     })
 
     console.log(
-      `[webhook] ✓ created order ${order.orderNumber} for Square order ${payment.orderId}`,
+      `[webhook] ✓ created order ${order.orderNumber} for Square order ${paymentOrderId}`,
     )
 
     // Best-effort confirmation email
