@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
-import { calculateShipping, calculateBulkDiscount } from '@/lib/utils'
+import { calculateShipping, calculateBulkDiscount, generateOrderNumber } from '@/lib/utils'
 
 /**
  * POST /api/checkout
@@ -174,12 +174,117 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // -------- create payment link via direct fetch (bypassing SDK) --------
-    // We tried the SDK first but it gave a generic "Missing required parameter"
-    // with no field-level detail. Direct calls work cleanly (verified with
-    // curl), so we serialize to snake_case JSON ourselves and POST it.
+    // -------- compute totals --------
+    const totalDiscount = bulkDiscountAmount + couponDiscountAmount
+    const shippingCost = calculateShipping(subtotal)
+    const finalTotal = subtotal + shippingCost - totalDiscount
+
     const idempotencyKey = randomUUID()
-    const referenceId = randomUUID() // we'll match this back to the order in the webhook
+    const referenceId = randomUUID() // matched back in webhook / success page
+
+    // -------- $0 orders: skip Square entirely --------
+    // Square Payment Links won't fire payment.* webhooks for zero-amount
+    // orders (nothing to actually charge). Create the Order locally and
+    // hand the buyer straight to the success page.
+    if (finalTotal <= 0) {
+      try {
+        const order = await prisma.$transaction(async (tx) => {
+          const orderItems: Array<{
+            productId: string
+            name: string
+            size: string
+            quantity: number
+            price: number
+          }> = []
+          for (const item of items as Array<{ productId: string; size: string; quantity: number }>) {
+            const product = await tx.product.findUnique({ where: { id: item.productId } })
+            if (!product) throw new Error(`PRODUCT_NOT_FOUND: ${item.productId}`)
+            orderItems.push({
+              productId: product.id,
+              name: product.name,
+              size: item.size.toUpperCase(),
+              quantity: item.quantity,
+              price: product.price,
+            })
+          }
+          const created = await tx.order.create({
+            data: {
+              orderNumber: generateOrderNumber(),
+              customerName: shippingAddress.customerName || '',
+              email: shippingAddress.email || '',
+              phone: shippingAddress.phone || '',
+              addressLine1: shippingAddress.addressLine1 || '',
+              addressLine2: shippingAddress.addressLine2 || '',
+              city: shippingAddress.city || '',
+              state: shippingAddress.state || '',
+              zipCode: shippingAddress.zipCode || '',
+              subtotal,
+              shipping: shippingCost,
+              discount: totalDiscount,
+              total: 0,
+              discountCode: appliedDiscountCode || null,
+              stripePaymentId: referenceId, // used by success page lookup
+              items: { create: orderItems },
+            },
+            include: { items: true },
+          })
+
+          for (const item of items as Array<{ productId: string; size: string; quantity: number }>) {
+            const stockField = `stock${item.size.toUpperCase()}` as
+              | 'stockXS' | 'stockS' | 'stockM' | 'stockL'
+            const updated = await tx.product.update({
+              where: { id: item.productId },
+              data: { [stockField]: { decrement: item.quantity } },
+              select: { stockXS: true, stockS: true, stockM: true, stockL: true },
+            })
+            if (updated.stockXS + updated.stockS + updated.stockM + updated.stockL === 0) {
+              await tx.product.update({ where: { id: item.productId }, data: { archived: true } })
+            }
+            await tx.sale.create({
+              data: {
+                productId: item.productId,
+                productName:
+                  orderItems.find((oi) => oi.productId === item.productId)?.name || '',
+                size: item.size.toUpperCase(),
+                price:
+                  orderItems.find((oi) => oi.productId === item.productId)?.price ?? 0,
+                paymentMethod: 'online',
+                channel: 'online',
+                orderId: created.id,
+              },
+            })
+          }
+
+          if (appliedDiscountCode) {
+            await tx.discountCode.updateMany({
+              where: { code: appliedDiscountCode },
+              data: { usageCount: { increment: 1 } },
+            })
+          }
+
+          return created
+        })
+
+        // Best-effort confirmation email
+        try {
+          const { sendOrderConfirmation } = await import('@/lib/email')
+          await sendOrderConfirmation(order)
+        } catch (err) {
+          console.error('[checkout $0] email failed (non-fatal):', err)
+        }
+
+        // Bypass Square — go straight to success page
+        return NextResponse.json({
+          url: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://press-charm.vercel.app'}/checkout/success?ref=${referenceId}`,
+          referenceId,
+          zeroAmount: true,
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown'
+        console.error('[checkout $0] failed:', msg)
+        return NextResponse.json({ error: msg }, { status: 500 })
+      }
+    }
 
     // Order-level metadata that survives the webhook round-trip.
     // Square rejects metadata VALUES that are empty strings — they require
