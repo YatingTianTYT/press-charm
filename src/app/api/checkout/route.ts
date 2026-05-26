@@ -21,6 +21,23 @@ import { calculateShipping, calculateBulkDiscount } from '@/lib/utils'
  *   SQUARE_ENVIRONMENT   — "sandbox" or "production" (default: production)
  */
 
+/**
+ * Square's `buyerPhoneNumber` field requires strict E.164 format
+ * ("+15551234567"). Anything else triggers "Invalid phone number" and the
+ * whole createPaymentLink call fails. We're lenient: any non-conformant
+ * input is returned as undefined so the field is omitted entirely.
+ */
+function normalizePhoneE164(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) return `+1${digits}` // US 10-digit
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}` // 1-prefixed US
+  if (raw.startsWith('+') && digits.length >= 10 && digits.length <= 15) {
+    return `+${digits}` // already E.164-ish
+  }
+  return undefined
+}
+
 function getSquareClient(): SquareClient {
   if (!process.env.SQUARE_ACCESS_TOKEN) {
     throw new Error('SQUARE_ACCESS_TOKEN not configured')
@@ -230,7 +247,11 @@ export async function POST(request: NextRequest) {
       },
       prePopulatedData: {
         buyerEmail: shippingAddress.email,
-        buyerPhoneNumber: shippingAddress.phone || undefined,
+        // Square requires E.164 format (e.g. "+15551234567"). Strip everything
+        // non-digit; if we get a clean 10-digit US number prepend +1; if 11
+        // digits starting with 1 prepend +; otherwise skip — better to omit
+        // than to send something that makes Square reject the whole request.
+        buyerPhoneNumber: normalizePhoneE164(shippingAddress.phone),
       },
     })
 
