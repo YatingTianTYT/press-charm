@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
-import { SquareClient, SquareEnvironment } from 'square'
 import { prisma } from '@/lib/prisma'
 import { calculateShipping, calculateBulkDiscount } from '@/lib/utils'
 
@@ -36,19 +35,6 @@ function normalizePhoneE164(raw: unknown): string | undefined {
     return `+${digits}` // already E.164-ish
   }
   return undefined
-}
-
-function getSquareClient(): SquareClient {
-  if (!process.env.SQUARE_ACCESS_TOKEN) {
-    throw new Error('SQUARE_ACCESS_TOKEN not configured')
-  }
-  return new SquareClient({
-    token: process.env.SQUARE_ACCESS_TOKEN,
-    environment:
-      process.env.SQUARE_ENVIRONMENT === 'sandbox'
-        ? SquareEnvironment.Sandbox
-        : SquareEnvironment.Production,
-  })
 }
 
 export async function POST(request: NextRequest) {
@@ -188,8 +174,10 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // -------- create payment link --------
-    const client = getSquareClient()
+    // -------- create payment link via direct fetch (bypassing SDK) --------
+    // We tried the SDK first but it gave a generic "Missing required parameter"
+    // with no field-level detail. Direct calls work cleanly (verified with
+    // curl), so we serialize to snake_case JSON ourselves and POST it.
     const idempotencyKey = randomUUID()
     const referenceId = randomUUID() // we'll match this back to the order in the webhook
 
@@ -225,43 +213,85 @@ export async function POST(request: NextRequest) {
       // ...nothing to write yet; for now we cap orders so this doesn't trip
     }
 
-    const response = await client.checkout.paymentLinks.create({
-      idempotencyKey,
+    // Build the snake_case JSON exactly like the working curl call.
+    // Money amounts go as plain numbers (NOT BigInt) — Square API accepts
+    // integer JSON numbers and many SDK BigInt issues vanish this way.
+    const phoneE164 = normalizePhoneE164(shippingAddress.phone)
+    const requestBody = {
+      idempotency_key: idempotencyKey,
       order: {
-        locationId: process.env.SQUARE_LOCATION_ID,
-        referenceId,
-        lineItems,
-        discounts: orderDiscounts.length > 0 ? orderDiscounts : undefined,
+        location_id: process.env.SQUARE_LOCATION_ID,
+        reference_id: referenceId,
+        line_items: lineItems.map((li) => ({
+          uid: li.uid,
+          name: li.name,
+          quantity: li.quantity,
+          base_price_money: {
+            amount: Number(li.basePriceMoney.amount),
+            currency: 'USD',
+          },
+          ...(li.metadata ? { metadata: li.metadata } : {}),
+        })),
+        ...(orderDiscounts.length > 0
+          ? {
+              discounts: orderDiscounts.map((d) => ({
+                uid: d.uid,
+                name: d.name,
+                amount_money: {
+                  amount: Number(d.amountMoney.amount),
+                  currency: 'USD',
+                },
+                scope: 'ORDER',
+              })),
+            }
+          : {}),
         metadata: orderMetadata,
       },
-      checkoutOptions: {
-        redirectUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/checkout/success?ref=${referenceId}`,
-        askForShippingAddress: false, // we collected it before checkout
-        merchantSupportEmail: process.env.EMAIL_FROM?.match(/<(.+)>/)?.[1] || undefined,
-        acceptedPaymentMethods: {
-          applePay: true,
-          googlePay: true,
-          cashAppPay: true,
-          afterpayClearpay: false,
+      checkout_options: {
+        redirect_url: `${process.env.NEXT_PUBLIC_BASE_URL || 'https://press-charm.vercel.app'}/checkout/success?ref=${referenceId}`,
+        ask_for_shipping_address: false,
+        accepted_payment_methods: {
+          apple_pay: true,
+          google_pay: true,
+          cash_app_pay: true,
+          afterpay_clearpay: false,
         },
       },
-      prePopulatedData: {
-        buyerEmail: shippingAddress.email,
-        // Square requires E.164 format (e.g. "+15551234567"). Strip everything
-        // non-digit; if we get a clean 10-digit US number prepend +1; if 11
-        // digits starting with 1 prepend +; otherwise skip — better to omit
-        // than to send something that makes Square reject the whole request.
-        buyerPhoneNumber: normalizePhoneE164(shippingAddress.phone),
+      pre_populated_data: {
+        buyer_email: shippingAddress.email,
+        ...(phoneE164 ? { buyer_phone_number: phoneE164 } : {}),
       },
-    })
+    }
 
-    if (!response.paymentLink) {
-      console.error('[checkout] Square returned no paymentLink', response)
-      return NextResponse.json({ error: 'Failed to create payment link' }, { status: 500 })
+    const squareResp = await fetch(
+      'https://connect.squareup.com/v2/online-checkout/payment-links',
+      {
+        method: 'POST',
+        headers: {
+          'Square-Version': '2024-12-18',
+          Authorization: `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      },
+    )
+    const data = await squareResp.json()
+    if (!squareResp.ok || !data.payment_link) {
+      const errs = data.errors || []
+      const detail =
+        errs.map((e: { field?: string; code?: string; detail?: string }) =>
+          `${e.field || e.code || 'error'}: ${e.detail}`,
+        ).join('; ') || `HTTP ${squareResp.status}`
+      console.error('[checkout] Square error:', JSON.stringify(errs, null, 2))
+      console.error('[checkout] Request body that failed:', JSON.stringify(requestBody, null, 2))
+      return NextResponse.json(
+        { error: `Failed to create checkout session: ${detail}` },
+        { status: 500 },
+      )
     }
 
     return NextResponse.json({
-      url: response.paymentLink.url,
+      url: data.payment_link.url,
       referenceId,
     })
   } catch (error) {
