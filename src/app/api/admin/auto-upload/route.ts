@@ -5,6 +5,10 @@ import { analyzeNailImage } from '@/lib/claude'
 import { uploadImage } from '@/lib/cloudinary'
 import { allocateNextShortCode } from '@/lib/shortcode'
 
+// Claude Vision + Cloudinary upload can take 10-20s combined. Override
+// Vercel's default 10s timeout so the call doesn't get killed mid-analysis.
+export const maxDuration = 60
+
 export async function POST(request: NextRequest) {
   try {
     const token = request.cookies.get('admin_session')?.value

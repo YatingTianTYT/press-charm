@@ -3,6 +3,9 @@ import { prisma } from '@/lib/prisma'
 import { verifySession } from '@/lib/auth'
 import { analyzeNailImage } from '@/lib/claude'
 
+// Claude Vision can take 5-10s; give it headroom past Vercel's 10s default.
+export const maxDuration = 60
+
 /**
  * POST /api/admin/products/[id]/regenerate-listing
  *

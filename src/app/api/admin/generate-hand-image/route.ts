@@ -4,6 +4,9 @@ import { verifySession } from '@/lib/auth'
 import { isGeminiAvailable, generateHandModelImage } from '@/lib/gemini'
 import { uploadImage } from '@/lib/cloudinary'
 
+// Gemini Pro image gen takes ~22s; Vercel Hobby default 10s killed it.
+export const maxDuration = 60
+
 export async function POST(request: NextRequest) {
   try {
     const token = request.cookies.get('admin_session')?.value

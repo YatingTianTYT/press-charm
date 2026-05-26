@@ -9,6 +9,11 @@ import {
 } from '@/lib/openai-image'
 import { getScenePrompt, type Scene } from '@/lib/scene-prompts'
 
+// Gemini 3 Pro Image takes ~22s per generation. Vercel's default function
+// timeout on the Hobby plan is 10s, which was silently killing every call.
+// Bumping to 60s (Hobby plan max).
+export const maxDuration = 60
+
 /**
  * POST /api/admin/generate-scene-image
  *
