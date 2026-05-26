@@ -18,7 +18,12 @@ export async function generateImageFromReference(
   }
 
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-image' })
+  // Upgraded from 'gemini-2.5-flash-image' (the cheap/fast tier that tended
+  // to re-imagine nail designs) to the Pro tier. Per Google docs, this model
+  // does "accurate identity preservation across up to 5 subjects" — directly
+  // targeting the "preserve my exact nail design" requirement. Trade-off:
+  // ~3.3x cost ($0.134 vs $0.04 per image at 2K) and slightly slower.
+  const model = genAI.getGenerativeModel({ model: 'gemini-3-pro-image-preview' })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const requestBody: any = {
@@ -56,7 +61,12 @@ export async function generateHandModelImage(
   }
 
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-image' })
+  // Upgraded from 'gemini-2.5-flash-image' (the cheap/fast tier that tended
+  // to re-imagine nail designs) to the Pro tier. Per Google docs, this model
+  // does "accurate identity preservation across up to 5 subjects" — directly
+  // targeting the "preserve my exact nail design" requirement. Trade-off:
+  // ~3.3x cost ($0.134 vs $0.04 per image at 2K) and slightly slower.
+  const model = genAI.getGenerativeModel({ model: 'gemini-3-pro-image-preview' })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const requestBody: any = {
